@@ -1,66 +1,24 @@
 mod options;
 mod headers;
+mod args;
+mod data_set;
 
 use std::str::FromStr;
 
 use clap::Parser;
 use csv::ReaderBuilder;
-use options::Args;
+use args::*;
 use simple_string_patterns::*;
 use indexmap::IndexMap;
-use serde_json::json;
-use chrono::NaiveDate;
 
 use calamine::{open_workbook_auto, Data, Error,Reader};
 
 use options::*;
 use headers::*;
+use data_set::*;
 
 
-#[derive(Debug, Clone)]
-pub struct DataSet {
-    pub sheet_index: usize,
-    pub sheet_key: String,
-    pub sheet_refs: Vec<String>,
-    pub headers: Vec<String>,
-    pub data: Vec<IndexMap<String, serde_json::Value>>
-}
-
-impl DataSet {
-    pub fn new(headers: &[String], data: &[IndexMap<String, serde_json::Value>], sheet_key: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
-        DataSet {
-            sheet_index: sheet_index,
-            sheet_key: sheet_key.to_owned(),
-            sheet_refs: sheet_refs.to_vec(),
-            headers: headers.to_vec(),
-            data: data.to_vec()
-        }
-    }
-
-    pub fn to_json(&self) -> String {
-        json!({
-            "sheet_index": self.sheet_index,
-            "sheet_key": self.sheet_key,
-            "sheet_refs": self.sheet_refs,
-            "headers": self.headers,
-            "data": self.data
-        }).to_string()
-    }
-}
-
-pub fn to_dictionary(row: &[serde_json::Value], headers: &[String]) -> IndexMap<String, serde_json::Value> {
-    let mut hm: IndexMap<String, serde_json::Value> = IndexMap::new();
-    let mut sub_index = 0;
-    for hk in headers {
-        if let Some(cell) = row.get(sub_index) {
-            hm.insert(hk.to_owned(), cell.to_owned());
-        } 
-        sub_index += 1;
-    }
-    hm
-}
-
-pub fn read_workbook(path: &str, sheet_opt: Option<String>, ref_sheet_index: usize) -> Result<DataSet, Error> {
+pub fn read_workbook(path: &str, sheet_opt: Option<String>, ref_sheet_index: usize, omit_header: bool) -> Result<DataSet, Error> {
     if let Ok(mut workbook) = open_workbook_auto(path) {
         let mut sheet_index = ref_sheet_index;
         let sheet_names = workbook.worksheets().into_iter().map(|ws| ws.0).collect::<Vec<String>>();
@@ -99,7 +57,7 @@ pub fn read_workbook(path: &str, sheet_opt: Option<String>, ref_sheet_index: usi
             let mut sheet_map: Vec<IndexMap<String, serde_json::Value>> = vec![];
             let mut row_index = 0;
             for row in sheet_data {
-                if row_index > 0 {
+                if row_index > 0 || omit_header {
                     sheet_map.push(to_dictionary(&row, &headers))
                 }
                 row_index += 1;
@@ -200,19 +158,16 @@ pub fn read_csv(path: &str, max_lines: Option<u32>, capture_header: bool, enforc
 
 
 pub fn render_spreadsheet(opts: &OptionSet) -> Result<(), Error> {
-    // let base_path = dotenv::var("DEfAULT_SOURCE_DIR").unwrap_or(".".to_string());
+    
     if let Some(file_path) = opts.path.clone() {
-            // let file_name = "labour-vote-share.csv";
         let enforce_euro_number_format = false;
-        //let path = format!("{}/{}", base_path, file_name);
         let sheet_key = opts.sheet.clone();
         let sheet_index = opts.index as usize;
         let extension = file_path.to_end(".").to_lowercase();
-        // println!("path: {}, {}", path, extension);
-
+        let omit_header = opts.omit_header;
         let data_set_result = match extension.as_str() {
-            "xlsx" | "xls" | "ods" => read_workbook(&file_path, sheet_key, sheet_index),
-            "csv" => read_csv(&file_path, None, true, enforce_euro_number_format),
+            "xlsx" | "xls" | "ods" => read_workbook(&file_path, sheet_key, sheet_index, omit_header),
+            "csv" => read_csv(&file_path, None, !omit_header, enforce_euro_number_format),
             _ => Err(From::from("Unsupported format"))
         };
         

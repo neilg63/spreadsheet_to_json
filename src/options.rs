@@ -1,51 +1,14 @@
-use clap::Parser;
+
 use crate::headers::*;
-use std::borrow::Cow;
 use std::sync::Arc;
 use simple_string_patterns::*;
 
-/// Command line arguments configuration
-#[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
-pub struct Args {
-  
-  #[clap(short, long, value_parser) ]
-  pub sheet: Option<String>,
-
-  #[clap(short, long, value_parser, default_value_t = 0)]
-  pub index: u32,
-  
-  pub path: Option<String>,
-
-  #[clap(long, value_parser, default_value_t = false)]
-  pub euro_number_format: bool,
-
-  #[clap(long, value_parser, default_value_t = false) ]
-  pub date_only: bool,
-
-  #[clap(short = 'k', long, value_parser) ]
-  pub keys: Option<String>,
-
-  #[clap(short, long, value_parser) ]
-  pub max: Option<u32>,
-
-  #[clap(short = 't', long, value_parser, default_value_t = 0) ]
-  pub header_row: u8,
-
-  #[clap(short = 'o',long, value_parser, default_value_t = false) ]
-  pub omit_header: bool,
-
-}
-
- fn to_strs<'a>(string_vec: &'a Vec<String>) -> Vec<&'a str> {
-  string_vec.iter().map(String::as_str).collect()
-}
 
 #[derive(Debug, Clone)]
 pub struct OptionSet {
-  pub sheet: Option<String>,
+  pub sheet: Option<String>, // Optional sheet name reference. Will default to index value if not matched
   pub index: u32, // worksheet index
-  pub path: Option<String>, // always parse as euro number format
+  pub path: Option<String>, // path argument. If None, do not attempt to parse
   pub euro_number_format: bool, // always parse as euro number format
   pub date_only: bool,
   pub columns: Vec<Column>,
@@ -55,31 +18,6 @@ pub struct OptionSet {
 
 }
 
-impl OptionSet {
-  pub fn from_args(args: &Args) -> Self {
-
-    let mut columns: Vec<Column> = vec![];
-    let mut index = 0;
-    if let Some(k_string) = args.keys.clone() {
-      let split_parts = k_string.to_segments(".");
-      for ck in split_parts {
-        columns.push(Column::from_key_index(Some(&ck), index));
-        index += 1;
-      }
-    }
-    OptionSet {
-      sheet: args.sheet.clone(),
-      index: args.index,
-      path: args.path.clone(),
-      euro_number_format: args.euro_number_format,
-      date_only: args.date_only,
-      columns,
-      max: args.max,
-      header_row: args.header_row,
-      omit_header: args.omit_header
-    }
-  }
-}
 
 #[derive(Debug, Clone)]
 pub enum Format {

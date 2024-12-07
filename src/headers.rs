@@ -20,6 +20,7 @@ pub fn to_radix_groups_with_offset_option(n: u32, radix: u32, index_offset: bool
     result
 }
 
+#[allow(dead_code)]
 pub fn to_radix_groups(n: u32, radix: u32) -> Vec<u32> {
     to_radix_groups_with_offset_option(n, radix, false)
 }
