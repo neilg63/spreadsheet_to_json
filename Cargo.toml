@@ -1,0 +1,15 @@
+[package]
+name = "spreadsheet_to_json"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+calamine = { version = "0.26.1", features = ["chrono", "dates"] }
+chrono = "0.4.38"
+clap = { version = "4.5.22", features = ["env", "derive"] }
+csv = "1.3.1"
+dotenv = { version = "0.15.0", features = ["clap", "cli"] }
+heck = "0.5.0"
+indexmap = { version = "2.7.0", features = ["serde"] }
+serde_json = { version = "1.0.133", features = ["preserve_order"] }
+simple-string-patterns = "0.3.14"
