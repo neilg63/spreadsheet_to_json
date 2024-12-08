@@ -1,0 +1,184 @@
+use std::str::FromStr;
+
+use csv::ReaderBuilder;
+use simple_string_patterns::*;
+use indexmap::IndexMap;
+use std::path::Path;
+
+use calamine::{open_workbook_auto, Data, Error,Reader};
+
+use crate::headers::*;
+use crate::data_set::*;
+use crate::OptionSet;
+
+pub fn render_spreadsheet(opts: &OptionSet) -> Result<DataSet, Error> {
+    
+    if let Some(filepath) = opts.path.clone() {
+        let path = Path::new(&filepath);
+        if !path.exists() {
+            return Err(From::from("The file `$filepath` is not available"));
+        }
+        let enforce_euro_number_format = false;
+        let sheet_key = opts.sheet.clone();
+        let sheet_index = opts.index as usize;
+        let extension = filepath.to_end(".").to_lowercase();
+        let omit_header = opts.omit_header;
+        match extension.as_str() {
+            "xlsx" | "xls" | "ods" => read_workbook(path, sheet_key, sheet_index, omit_header),
+            "csv" => read_csv(path, None, !omit_header, enforce_euro_number_format),
+            _ => Err(From::from("Unsupported format"))
+        }
+    } else {
+        Err(From::from("No file path specified"))
+    }
+    
+}
+
+
+pub fn read_workbook(path: &Path, sheet_opt: Option<String>, ref_sheet_index: usize, omit_header: bool) -> Result<DataSet, Error> {
+    if path.exists() == false {
+        return Err(From::from("the file ${filepath} does not exist"));
+    }
+    if let Ok(mut workbook) = open_workbook_auto(path) {
+        let mut sheet_index = ref_sheet_index;
+        let sheet_names = workbook.worksheets().into_iter().map(|ws| ws.0).collect::<Vec<String>>();
+        if let Some(sheet_key) = sheet_opt {
+            let key_string = sheet_key.strip_spaces().to_lowercase();
+            if let Some(s_index) = sheet_names.clone().into_iter().position(|sn| sn.strip_spaces().to_lowercase() == key_string) {
+                sheet_index = s_index;
+            }
+        }
+        if let Some(first_sheet_name) = sheet_names.get(sheet_index) {
+            let range = workbook.worksheet_range(first_sheet_name)?;
+            let mut headers: Vec<String> = vec![];
+            if let Some(first_row) = range.headers() {
+                headers = build_header_keys(&first_row);
+            }
+            
+            let sheet_data: Vec<Vec<serde_json::Value>> = range.rows()
+            .map(|row| {
+                row.iter().map(|cell| match cell {
+                    Data::Float(f) => serde_json::Value::Number(serde_json::Number::from_f64(*f).unwrap()),
+                    Data::DateTime(d) => {
+                        let ndt = d.as_datetime();
+                        let dt_ref = if let Some(dt) = ndt {
+                            dt.format("%Y-%m-%dT%H:%M:%S").to_string()
+                        } else {
+                            "".to_string()
+                        };
+                        serde_json::Value::String(dt_ref)
+                    },
+                    Data::Bool(b) => serde_json::Value::Bool(*b),
+                    // For other types, convert to string since JSON can't directly represent them as unquoted values
+                    _ => serde_json::Value::String(cell.to_string()),
+                }).collect()
+            })
+            .collect();
+            let mut sheet_map: Vec<IndexMap<String, serde_json::Value>> = vec![];
+            let mut row_index = 0;
+            for row in sheet_data {
+                if row_index > 0 || omit_header {
+                    sheet_map.push(to_dictionary(&row, &headers))
+                }
+                row_index += 1;
+            }
+            Ok(DataSet::new(&extract_file_name(path), &headers, &sheet_map, &first_sheet_name, sheet_index, &sheet_names))
+        } else {
+            Err(From::from("the workbook does not have any sheets"))
+        }
+    }  else {
+        Err(From::from("Cannot open the workbook"))
+    }
+}
+
+pub fn read_csv(path: &Path, max_lines: Option<u32>, capture_header: bool, enforce_euro_number_format: bool) -> Result<DataSet, Error> {
+    if let Ok(mut rdr)= ReaderBuilder::new().from_path(path) {
+        let mut rows: Vec<IndexMap<String, serde_json::Value>> = vec![];
+        let mut line_count = 0;
+        let has_max = max_lines.is_some();
+        let max_line_usize = if has_max {
+            max_lines.unwrap_or(1000) as usize
+        } else {
+            1000
+        };
+        let mut headers: Vec<String> = vec![];
+        for result in rdr.records() {
+            if let Ok(record) = result {
+                let mut row: Vec<serde_json::Value> = vec![];
+                for cell in record.into_iter() {
+                    if has_max && line_count >= max_line_usize {
+                        break;
+                    }
+                    let has_number = cell.to_first_number::<f64>().is_some();
+                    let num_cell = if has_number {
+                        let euro_num_mode = is_euro_number_format(cell, enforce_euro_number_format);
+                        if euro_num_mode {
+                            cell.replace(",", ".").replace(",", ".")
+                        } else {
+                            cell.replace(",", "")
+                        }
+                    } else {
+                        cell.to_owned()
+                    };
+                    if num_cell.is_numeric() {
+                        if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
+                            row.push(serde_json::Value::Number(float_val));
+                        }
+                    } else {
+                        row.push(serde_json::Value::String(cell.to_string()));
+                    }
+                    line_count += 1;
+                    if capture_header && line_count < 2 {
+                        let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
+                        headers = build_header_keys(&first_row);
+                        
+                    } else {
+                        rows.push(to_dictionary(&row, &headers));
+                    }
+                    
+                }
+            }
+        }
+       Ok(DataSet::new(&extract_file_name(path), &headers, &rows, "none", 0, &[]))
+    } else {
+        Err(From::from("Cannot read the CSV file"))
+    }
+}
+
+pub fn extract_file_name(path: &Path) -> String {
+    if let Some(file_ref) = path.file_name() {
+        file_ref.to_str().unwrap_or("")
+    } else {
+        ""
+    }.to_owned()
+}
+
+pub fn is_euro_number_format(txt: &str, enforce_with_single_dot: bool) -> bool {
+    let chs = txt.char_indices();
+    let mut dot_pos: Option<usize> = None;
+    let mut num_dots = 0;
+    let mut comma_pos: Option<usize> = None;
+    for (index, ch) in chs {
+        match ch {
+            '.' => {
+                if dot_pos.is_none() {
+                    dot_pos = Some(index);
+                }
+                num_dots += 1;
+            }
+            ',' => if comma_pos.is_none() {
+                comma_pos = Some(index);
+            },
+            _ => ()
+        }
+    }
+    if let Some(d_pos) = dot_pos {
+        if let Some(c_pos) = comma_pos {
+            d_pos < c_pos
+        } else {
+            num_dots > 1 || enforce_with_single_dot
+        }
+    } else {
+        false
+    }
+}

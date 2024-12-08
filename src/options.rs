@@ -1,7 +1,5 @@
-
 use crate::headers::*;
 use std::sync::Arc;
-use simple_string_patterns::*;
 
 
 #[derive(Debug, Clone)]
