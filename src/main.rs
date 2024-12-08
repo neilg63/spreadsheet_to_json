@@ -3,6 +3,7 @@ mod headers;
 mod args;
 mod data_set;
 mod reader;
+mod euro_number_format;
 
 use clap::Parser;
 use args::*;
