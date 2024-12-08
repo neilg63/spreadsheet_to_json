@@ -23,6 +23,7 @@ impl DataSet {
 
     pub fn to_json(&self) -> String {
         json!({
+            "name": self.filename,
             "sheet": {
                 "key": self.sheet.0,
                 "index": self.sheet.1

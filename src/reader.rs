@@ -16,7 +16,7 @@ pub fn render_spreadsheet(opts: &OptionSet) -> Result<DataSet, Error> {
     if let Some(filepath) = opts.path.clone() {
         let path = Path::new(&filepath);
         if !path.exists() {
-            return Err(From::from("The file `$filepath` is not available"));
+            return Err(From::from("The file  is not available"));
         }
         let enforce_euro_number_format = false;
         let sheet_key = opts.sheet.clone();
