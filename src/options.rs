@@ -1,4 +1,5 @@
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{json, Value};
 
 use crate::headers::*;
 use std::sync::Arc;
@@ -19,20 +20,20 @@ pub struct OptionSet {
 }
 
 impl OptionSet {
-  pub fn to_json(&self) -> String {
+  pub fn to_json(&self) -> Value {
     json!({
       "sheet": {
-        "key": self.sheet.unwrap_or("".to_string()),
+        "key": self.sheet.clone().unwrap_or("".to_string()),
         "index": self.index,
-      }.
-      "path": self.path.unwrap_or("".to_string()),
+      },
+      "path": self.path.clone().unwrap_or("".to_string()),
       "euro_number_format": self.euro_number_format,
       "date_only": self.date_only,
-      "columns": self.columns
+      "columns": self.columns.clone().into_iter().map(|c| c.to_json()).collect::<Vec<Value>>(),
       "max": self.max.unwrap_or(0),
       "header_row": self.header_row,
       "omit_header": self.omit_header
-    }).to_string()
+    })
   }
 }
 
@@ -47,6 +48,21 @@ pub enum Format {
   Date,
   DateTime
 }
+
+impl ToString for Format {
+  fn to_string(&self) -> String {
+      match self {
+        Self::Auto => "auto",
+        Self::Text => "text",
+        Self::Integer => "integer",
+        Self::Decimal(n) => "decimal($n)",
+        Self::Boolean => "boolean",
+        Self::Date => "date",
+        Self::DateTime => "datetime"
+      }.to_string()
+  }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct Column {
@@ -77,6 +93,16 @@ impl Column {
       date_only,
       euro_number_format
     }
+  }
+
+  pub fn to_json(&self) -> Value {
+    json!({
+      "key": self.key.to_string(),
+      "format": self.format.to_string(),
+      "date_only": self.date_only,
+      "euro_number_format": self.euro_number_format,
+      "default": self.default
+    })
   }
 
 }

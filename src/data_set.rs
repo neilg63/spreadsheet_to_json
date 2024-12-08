@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone)]
 pub struct DataSet {
@@ -23,7 +23,7 @@ impl DataSet {
         }
     }
 
-    pub fn to_json(&self) -> String {
+    pub fn to_json(&self) -> Value {
         json!({
             "name": self.filename,
             "extension": self.extension,
@@ -34,7 +34,7 @@ impl DataSet {
             "sheets": self.sheets,
             "fields": self.keys,
             "data": self.data
-        }).to_string()
+        })
     }
 }
 

@@ -560,6 +560,7 @@ dependencies = [
  "dotenv",
  "heck",
  "indexmap",
+ "serde",
  "serde_json",
  "simple-string-patterns",
 ]
