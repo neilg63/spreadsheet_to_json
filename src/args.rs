@@ -1,4 +1,5 @@
 use clap::Parser;
+use heck::ToSnakeCase;
 use crate::options::{OptionSet, Column};
 use simple_string_patterns::ToSegments;
 
@@ -45,10 +46,10 @@ impl FromArgs for OptionSet {
     let mut columns: Vec<Column> = vec![];
     let mut index = 0;
     if let Some(k_string) = args.keys.clone() {
-        let split_parts = k_string.to_segments(".");
+        let split_parts = k_string.to_segments(",");
         for ck in split_parts {
-        columns.push(Column::from_key_index(Some(&ck), index));
-        index += 1;
+            columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
+            index += 1;
         }
     }
     OptionSet {

@@ -1,6 +1,8 @@
 
 use heck::ToSnakeCase;
 
+use crate::Column;
+
 pub fn to_radix_groups_with_offset_option(n: u32, radix: u32, index_offset: bool) -> Vec<u32> {
     let mut result = Vec::new();
     let mut num = n;
@@ -43,18 +45,22 @@ pub fn to_head_key(index: usize) -> String {
     }
 }
 
-pub fn build_header_keys(first_row: &[String]) -> Vec<String> {
+pub fn build_header_keys(first_row: &[String], columns: &[Column]) -> Vec<String> {
 let mut h_index = 0;
     let num_cells = first_row.len();
     let mut headers: Vec<String> = vec![];
-    let num_pop_header_cells = first_row.to_owned().into_iter().filter(|sn| sn.to_snake_case().len() > 0).collect::<Vec<String>>().len();
+    let num_pop_header_cells = first_row.len();
     let add_custom_headers = num_pop_header_cells >= num_cells;
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
-        if add_custom_headers {
-            headers.push(sn);
+        if let Some(col) = columns.get(h_index) {
+            headers.push(col.key.to_string());
         } else {
-            headers.push(to_head_key(h_index));
+            if add_custom_headers && sn.len() > 0 {
+                headers.push(sn);
+            } else {
+                headers.push(to_head_key(h_index));
+            }
         }
         h_index += 1;
     }
@@ -63,7 +69,6 @@ let mut h_index = 0;
 
 #[cfg(test)]
 mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
     #[test]

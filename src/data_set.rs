@@ -4,6 +4,7 @@ use serde_json::json;
 #[derive(Debug, Clone)]
 pub struct DataSet {
     pub filename: String,
+    pub extension: String,
     pub sheet: (String, usize),
     pub sheets: Vec<String>,
     pub keys: Vec<String>,
@@ -11,8 +12,9 @@ pub struct DataSet {
 }
 
 impl DataSet {
-    pub fn new(name: &str, keys: &[String], data: &[IndexMap<String, serde_json::Value>], sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
+    pub fn new(name: &str, extension: &str, keys: &[String], data: &[IndexMap<String, serde_json::Value>], sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
         DataSet {
+            extension: extension.to_owned(),
             filename: name.to_owned(), 
             sheet: (sheet.to_owned(), sheet_index),
             sheets: sheet_refs.to_vec(),
@@ -24,6 +26,7 @@ impl DataSet {
     pub fn to_json(&self) -> String {
         json!({
             "name": self.filename,
+            "extension": self.extension,
             "sheet": {
                 "key": self.sheet.0,
                 "index": self.sheet.1

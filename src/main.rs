@@ -20,6 +20,7 @@ fn main() {
    let json_value = match result {
     Err(msg) => json!{ { "error": true, "message": msg.to_string() } }.to_string(),
     Ok(data_set) => data_set.to_json()
+    //Ok(data_set) => json!({"ok": true}).to_string()
    };
 
    println!("{}", json_value);
