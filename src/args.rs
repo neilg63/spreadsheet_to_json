@@ -34,6 +34,9 @@ pub struct Args {
   #[clap(short = 'o',long, value_parser, default_value_t = false) ]
   pub omit_header: bool,
 
+  #[clap(short = 'x',long, value_parser, default_value_t = false) ]
+  pub exclude_cells: bool, // test validity only and show options
+
 }
 
 pub trait FromArgs {

@@ -1,3 +1,5 @@
+use serde_json::json;
+
 use crate::headers::*;
 use std::sync::Arc;
 
@@ -14,6 +16,24 @@ pub struct OptionSet {
   pub header_row: u8,
   pub omit_header: bool,
 
+}
+
+impl OptionSet {
+  pub fn to_json(&self) -> String {
+    json!({
+      "sheet": {
+        "key": self.sheet.unwrap_or("".to_string()),
+        "index": self.index,
+      }.
+      "path": self.path.unwrap_or("".to_string()),
+      "euro_number_format": self.euro_number_format,
+      "date_only": self.date_only,
+      "columns": self.columns
+      "max": self.max.unwrap_or(0),
+      "header_row": self.header_row,
+      "omit_header": self.omit_header
+    }).to_string()
+  }
 }
 
 

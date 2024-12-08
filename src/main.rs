@@ -18,9 +18,16 @@ fn main() {
     
    let result = render_spreadsheet(&opts);
    let json_value = match result {
-    Err(msg) => json!{ { "error": true, "message": msg.to_string() } }.to_string(),
-    Ok(data_set) => data_set.to_json()
-    //Ok(data_set) => json!({"ok": true}).to_string()
+    Err(msg) => json!{ { "error": true, "message": msg.to_string(), "options": opts.to_json() } }.to_string(),
+    Ok(data_set) => {
+        if args.exclude_cells {
+            json!({
+                "options": opts.to_json() 
+            }).to_string()
+        } else {
+            data_set.to_json()
+        }
+    }
    };
 
    println!("{}", json_value);
