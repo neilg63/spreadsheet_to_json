@@ -8,11 +8,11 @@ pub struct DataSet {
     pub sheet: (String, usize),
     pub sheets: Vec<String>,
     pub keys: Vec<String>,
-    pub data: Vec<IndexMap<String, serde_json::Value>>
+    pub data: Vec<IndexMap<String, Value>>
 }
 
 impl DataSet {
-    pub fn new(name: &str, extension: &str, keys: &[String], data: &[IndexMap<String, serde_json::Value>], sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
+    pub fn new(name: &str, extension: &str, keys: &[String], data: &[IndexMap<String, Value>], sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
         DataSet {
             extension: extension.to_owned(),
             filename: name.to_owned(), 
@@ -38,7 +38,7 @@ impl DataSet {
     }
 }
 
-pub fn to_dictionary(row: &[serde_json::Value], headers: &[String]) -> IndexMap<String, serde_json::Value> {
+pub fn to_dictionary(row: &[serde_json::Value], headers: &[String]) -> IndexMap<String, Value> {
     let mut hm: IndexMap<String, serde_json::Value> = IndexMap::new();
     let mut sub_index = 0;
     for hk in headers {
