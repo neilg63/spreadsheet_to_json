@@ -168,7 +168,6 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
                   // The header row must be in the first 255 line indices
                   if capture_header && !has_headers && line_count == opts.header_row_index() && line_count < 256 {
                       let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
-                      println!("lc: {} fr {:?}", line_count, &first_row);
                       headers = build_header_keys(&first_row, &columns);
                       
                   } else {
