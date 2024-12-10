@@ -10,7 +10,6 @@ use calamine::{open_workbook_auto, Data, Error,Reader};
 
 use crate::headers::*;
 use crate::data_set::*;
-use crate::Column;
 use crate::Format;
 use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
@@ -80,7 +79,11 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
                       let dt_ref = if let Some(dt) = ndt {
                           let fmt_str = match format {
                             Format::Date => "%Y-%m-%d",
-                            _ => "%Y-%m-%dT%H:%M:%S.000Z"
+                            _ => if opts.date_only {
+                              "%Y-%m-%d"
+                            } else {
+                              "%Y-%m-%dT%H:%M:%S.000Z"
+                            }
                           };
                           dt.format(fmt_str).to_string()
                       } else {
@@ -130,6 +133,13 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
           1000
       };
       let mut headers: Vec<String> = vec![];
+      let mut has_headers = false;
+      if capture_header {
+        if let Ok(hdrs) = rdr.headers() {
+            headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
+            has_headers = true;
+        }
+      }
       for result in rdr.records() {
           if let Ok(record) = result {
               let mut row: Vec<Value> = vec![];
@@ -148,22 +158,23 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
                   } else {
                       cell.to_owned()
                   };
-                  if num_cell.is_numeric() {
+                  if num_cell.len() > 0 && num_cell.is_numeric() {
                       if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
                           row.push(Value::Number(float_val));
                       }
                   } else {
                       row.push(Value::String(cell.to_string()));
                   }
-                  line_count += 1;
-                  if capture_header && line_count < 2 {
+                  // The header row must be in the first 255 line indices
+                  if capture_header && !has_headers && line_count == opts.header_row_index() && line_count < 256 {
                       let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
+                      println!("lc: {} fr {:?}", line_count, &first_row);
                       headers = build_header_keys(&first_row, &columns);
                       
                   } else {
                       rows.push(to_dictionary(&row, &headers));
                   }
-                  
+                  line_count += 1;
               }
           }
         }

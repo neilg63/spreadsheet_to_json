@@ -1,6 +1,9 @@
+use std::str::FromStr;
+
 use clap::Parser;
 use heck::ToSnakeCase;
-use crate::options::{OptionSet, Column};
+use serde_json::{Number, Value};
+use crate::{options::{Column, OptionSet}, Format, is_truthy::*};
 use simple_string_patterns::ToSegments;
 
 /// Command line arguments configuration
@@ -51,7 +54,29 @@ impl FromArgs for OptionSet {
     if let Some(k_string) = args.keys.clone() {
         let split_parts = k_string.to_segments(",");
         for ck in split_parts {
-            columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
+            let sub_parts = ck.to_segments(":");
+            let num_subs = sub_parts.len();
+            if num_subs < 2 {
+                columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
+            } else {
+                let fmt = Format::from_str(sub_parts.get(1).unwrap_or(&"auto".to_string())).unwrap_or(Format::Auto);
+                let mut default_val = None;
+                if let Some(def_val) = sub_parts.get(2) {
+                    default_val = match fmt {
+                        Format::Integer => Some(Value::Number(Number::from_i128(i128::from_str(&def_val).unwrap()).unwrap())),
+                        Format::Boolean => {
+                            if let Some(is_true) = is_truthy_core(def_val, false) {
+                                Some(Value::Bool(is_true))
+                            } else {
+                                None
+                            }
+                        },
+                        _ => Some(Value::String(def_val.clone()))
+                    }
+                }
+                columns.push(Column::from_key_ref_with_format(Some(&ck.to_snake_case()), index, fmt, default_val, false, false));
+            }
+            
             index += 1;
         }
     }

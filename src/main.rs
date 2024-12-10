@@ -4,6 +4,9 @@ mod args;
 mod data_set;
 mod reader;
 mod euro_number_format;
+mod is_truthy;
+
+use std::env;
 
 use clap::Parser;
 use args::*;
@@ -16,6 +19,7 @@ use reader::*;
 fn main() {
     let args = Args::parse();
     let opts = OptionSet::from_args(&args);
+    env::set_var("RUST_BACKTRACE", "1");
     
    let result = render_spreadsheet(&opts);
    let json_value = match result {

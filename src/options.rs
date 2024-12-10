@@ -1,8 +1,9 @@
+use clap::Error;
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::headers::*;
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,10 @@ impl OptionSet {
       "omit_header": self.omit_header
     })
   }
+
+  pub fn header_row_index(&self) -> usize {
+    self.header_row as usize
+  }
 }
 
 
@@ -63,14 +68,35 @@ impl ToString for Format {
   }
 }
 
+impl FromStr for Format {
+  type Err = Error;
+  fn from_str(key: &str) -> Result<Self, Self::Err> {
+      let fmt = match key {
+        "text" => Self::Text,
+        "integer" => Self::Integer,
+        "decimal_1" => Self::Decimal(1),
+        "decimal_2" => Self::Decimal(2),
+        "decimal_3" => Self::Decimal(3),
+        "decimal_4" => Self::Decimal(4),
+        "decimal_5" => Self::Decimal(5),
+        "boolean" => Self::Boolean,
+        "date" => Self::Date,
+        "datetime" => Self::DateTime,
+        _ => Self::Auto,
+      };
+      Ok(fmt)
+  }
+}
+
+
 
 #[derive(Debug, Clone)]
 pub struct Column {
   pub key:  Arc<str>,
   pub format: Format,
+  pub default: Option<Value>,
   pub date_only: bool, // date only in Format::Auto mode with datetime objects
   pub euro_number_format: bool, // parse as euro number format
-  pub default: Option<serde_json::Value>,
 }
 
 impl Column {
@@ -84,7 +110,7 @@ impl Column {
     Self::from_key_ref_with_format(key_opt, index, Format::Auto, None, date_only, euro_number_format)
   }
 
-  pub fn from_key_ref_with_format(key_opt: Option<&str>, index: usize, format: Format, default: Option<serde_json::Value>, date_only: bool, euro_number_format: bool) -> Self {
+  pub fn from_key_ref_with_format(key_opt: Option<&str>, index: usize, format: Format, default: Option<Value>, date_only: bool, euro_number_format: bool) -> Self {
     let key = key_opt.map(Arc::from).unwrap_or_else(|| Arc::from(to_head_key(index)));
     Column {
       key,
