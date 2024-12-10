@@ -1,5 +1,4 @@
 use clap::Error;
-use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::headers::*;
@@ -72,16 +71,17 @@ impl FromStr for Format {
   type Err = Error;
   fn from_str(key: &str) -> Result<Self, Self::Err> {
       let fmt = match key {
-        "text" => Self::Text,
-        "integer" => Self::Integer,
-        "decimal_1" => Self::Decimal(1),
-        "decimal_2" => Self::Decimal(2),
-        "decimal_3" => Self::Decimal(3),
-        "decimal_4" => Self::Decimal(4),
-        "decimal_5" => Self::Decimal(5),
-        "boolean" => Self::Boolean,
-        "date" => Self::Date,
-        "datetime" => Self::DateTime,
+        "s" | "str" | "string" | "t" | "txt" | "text" => Self::Text,
+        "i" | "int" | "integer" => Self::Integer,
+        "d1" | "decimal_1" => Self::Decimal(1),
+        "d2" | "decimal_2" => Self::Decimal(2),
+        "d3" | "decimal_3" => Self::Decimal(3),
+        "d4" | "decimal_4" => Self::Decimal(4),
+        "d5" | "decimal_5" => Self::Decimal(5),
+        "d6" | "decimal_6" => Self::Decimal(6),
+        "b" | "bool" | "boolean" => Self::Boolean,
+        "da" | "date" => Self::Date,
+        "dt" | "datetime" => Self::DateTime,
         _ => Self::Auto,
       };
       Ok(fmt)

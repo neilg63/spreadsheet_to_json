@@ -10,6 +10,7 @@ use calamine::{open_workbook_auto, Data, Error,Reader};
 
 use crate::headers::*;
 use crate::data_set::*;
+use crate::is_truthy::is_truthy_core;
 use crate::Format;
 use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
@@ -141,46 +142,55 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
         }
       }
       for result in rdr.records() {
-          if let Ok(record) = result {
-              let mut row: Vec<Value> = vec![];
-              for cell in record.into_iter() {
-                  if has_max && line_count >= max_line_usize {
-                      break;
-                  }
-                  let has_number = cell.to_first_number::<f64>().is_some();
-                  let num_cell = if has_number {
-                      let euro_num_mode = is_euro_number_format(cell, opts.euro_number_format);
-                      if euro_num_mode {
-                          cell.replace(",", ".").replace(",", ".")
-                      } else {
-                          cell.replace(",", "")
-                      }
-                  } else {
-                      cell.to_owned()
-                  };
-                  if num_cell.len() > 0 && num_cell.is_numeric() {
-                      if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
-                          row.push(Value::Number(float_val));
-                      }
-                  } else {
-                      row.push(Value::String(cell.to_string()));
-                  }
-                  // The header row must be in the first 255 line indices
-                  if capture_header && !has_headers && line_count == opts.header_row_index() && line_count < 256 {
-                      let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
-                      headers = build_header_keys(&first_row, &columns);
-                      
-                  } else {
-                      rows.push(to_dictionary(&row, &headers));
-                  }
-                  line_count += 1;
-              }
+        if has_max && line_count >= max_line_usize {
+            break;
+        }
+        if let Ok(record) = result {
+          let mut row: Vec<Value> = vec![];
+          for cell in record.into_iter() {
+              let new_cell = csv_cell_to_json_value(cell, opts);
+              row.push(new_cell);
+          }
+          // The header row must be in the first 255 line indices
+          if capture_header && !has_headers && line_count == opts.header_row_index() && line_count < 256 {
+            let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
+            headers = build_header_keys(&first_row, &columns);
+          } else {
+            rows.push(to_dictionary(&row, &headers));
+          }
+          line_count += 1;
           }
         }
        Ok(DataSet::new(&extract_file_name(path), extension, &headers, &rows, "none", 0, &[]))
     } else {
-        Err(From::from("Cannot read the CSV file"))
+      Err(From::from("Cannot read the CSV file"))
     }
+}
+
+fn csv_cell_to_json_value(cell: &str, opts: &OptionSet) -> Value {
+    let has_number = cell.to_first_number::<f64>().is_some();
+    // clean cell to check if it's numeric
+    let num_cell = if has_number {
+        let euro_num_mode = is_euro_number_format(cell, opts.euro_number_format);
+        if euro_num_mode {
+            cell.replace(",", ".").replace(",", ".")
+        } else {
+            cell.replace(",", "")
+        }
+    } else {
+        cell.to_owned()
+    };
+    let mut new_cell = Value::Null;
+    if num_cell.len() > 0 && num_cell.is_numeric() {
+        if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
+            new_cell = Value::Number(float_val);
+        }
+    } else if let Some(is_true) = is_truthy_core(cell, false) {
+        new_cell = Value::Bool(is_true);
+    } else {
+        new_cell = Value::String(cell.to_string());
+    }
+    new_cell
 }
 
 pub fn extract_file_name(path: &Path) -> String {
