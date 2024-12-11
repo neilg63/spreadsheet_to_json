@@ -150,6 +150,8 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
             headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
             has_headers = true;
         }
+        let columns = opts.columns.clone();
+        headers = build_header_keys(&headers, &columns);
       }
       for result in rdr.records() {
         if has_max && line_count >= max_line_usize {
