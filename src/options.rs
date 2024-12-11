@@ -1,8 +1,8 @@
 use clap::Error;
 use serde_json::{json, Value};
-
+use tokio::io::AsyncWriteExt;
 use crate::headers::*;
-use std::{str::FromStr, sync::Arc};
+use std::{fs::File, str::FromStr, sync::Arc};
 
 
 #[derive(Debug, Clone)]
@@ -42,6 +42,14 @@ impl OptionSet {
 
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
+  }
+
+  pub fn max_rows(&self) -> usize {
+    if let Some(mr) = self.max {
+      mr as usize
+    } else {
+      default_max_rows()
+    }
   }
 }
 
@@ -135,4 +143,12 @@ impl Column {
     })
   }
 
+}
+
+
+fn default_max_rows() -> usize {
+  dotenv::var("DEFAULT_MAX_ROWS")
+  .ok()
+  .and_then(|s| s.parse::<usize>().ok())
+  .unwrap_or(10000)
 }

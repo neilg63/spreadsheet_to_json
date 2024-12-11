@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use csv::ReaderBuilder;
 use csv::StringRecord;
+use heck::ToSnakeCase;
 use serde_json::{Number, Value};
 use simple_string_patterns::*;
 use indexmap::IndexMap;
@@ -43,6 +44,7 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
     }
     if let Ok(mut workbook) = open_workbook_auto(path) {
       let columns = opts.columns.clone();
+      let max_rows = opts.max_rows();
         let mut sheet_index = opts.index as usize;
         let sheet_names = workbook.worksheets().into_iter().map(|ws| ws.0).collect::<Vec<String>>();
         if let Some(sheet_key) = opts.sheet.clone() {
@@ -56,20 +58,26 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
             let mut headers: Vec<String> = vec![];
             let mut has_headers = false;
             let capture_headers = !opts.omit_header;
-            let mut row_index: usize = 0;
             if let Some(first_row) = range.headers() {
                 headers = build_header_keys(&first_row, &columns);
                 has_headers = true;
             }
-            if capture_headers && opts.header_row_index() > 0 {
-              
-            }
             let source_rows  = range.rows();
             let mut sheet_map: Vec<IndexMap<String, Value>> = vec![];
             let mut row_index = 0;
+            let header_row_index = opts.header_row_index();
+            let match_header_row_below = capture_headers && header_row_index > 0;
             for row in source_rows {
-              let cells = workbook_row_to_values(row, opts);
-              sheet_map.push(to_dictionary(&cells, &headers));
+              if row_index >= max_rows {
+                break;
+              }
+              if match_header_row_below && (row_index + 1) == header_row_index {
+                let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
+                headers = build_header_keys(&h_row, &columns);
+              } else if has_headers || !capture_headers {
+                let cells = workbook_row_to_values(row, opts);
+                sheet_map.push(to_dictionary(&cells, &headers));
+              }
               row_index += 1;
             }
             Ok(DataSet::new(&extract_file_name(path), extension, &headers, &sheet_map, &first_sheet_name, sheet_index, &sheet_names))
@@ -138,17 +146,13 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
       let mut rows: Vec<IndexMap<String, Value>> = vec![];
       let mut line_count = 0;
       let has_max = opts.max.is_some();
-      let max_line_usize = if has_max {
-          opts.max.unwrap_or(1000) as usize
-      } else {
-          1000
-      };
+      let max_line_usize = opts.max_rows();
       let mut headers: Vec<String> = vec![];
-      let mut has_headers = false;
+      // let mut has_headers = false;
       if capture_header {
         if let Ok(hdrs) = rdr.headers() {
             headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
-            has_headers = true;
+            // has_headers = true;
         }
         let columns = opts.columns.clone();
         headers = build_header_keys(&headers, &columns);
@@ -231,6 +235,8 @@ fn csv_cell_to_json_value(cell: &str, opts: &OptionSet, index: usize) -> Value {
     }
     new_cell
 }
+
+
 
 pub fn extract_file_name(path: &Path) -> String {
     if let Some(file_ref) = path.file_name() {
