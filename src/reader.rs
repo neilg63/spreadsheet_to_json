@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use csv::ReaderBuilder;
+use csv::StringRecord;
 use serde_json::{Number, Value};
 use simple_string_patterns::*;
 use indexmap::IndexMap;
@@ -53,64 +54,23 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
         if let Some(first_sheet_name) = sheet_names.get(sheet_index) {
             let range = workbook.worksheet_range(first_sheet_name)?;
             let mut headers: Vec<String> = vec![];
+            let mut has_headers = false;
+            let capture_headers = !opts.omit_header;
+            let mut row_index: usize = 0;
             if let Some(first_row) = range.headers() {
                 headers = build_header_keys(&first_row, &columns);
+                has_headers = true;
             }
-            let sheet_data: Vec<Vec<Value>> = range.rows()
-            .map(|row| {
-              let mut cells: Vec<Value> = vec![];
-              let mut c_index = 0;
-              let format = if let Some(col) = columns.get(c_index) {
-                col.format.clone()   
-              } else {
-                Format::Auto
-              };
-              for cell in row {
-                let new_cell = match cell {
-                  Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
-                  Data::Float(f) => {
-                    match format {
-                      Format::Integer => Value::Number(Number::from_i128(*f as i128).unwrap()),
-                      _ => Value::Number(Number::from_f64(*f).unwrap())
-                    }
-                  },
-                  Data::DateTimeIso(d) => Value::String(d.to_owned()),
-                  Data::DateTime(d) => {
-                      let ndt = d.as_datetime();
-                      let dt_ref = if let Some(dt) = ndt {
-                          let fmt_str = match format {
-                            Format::Date => "%Y-%m-%d",
-                            _ => if opts.date_only {
-                              "%Y-%m-%d"
-                            } else {
-                              "%Y-%m-%dT%H:%M:%S.000Z"
-                            }
-                          };
-                          dt.format(fmt_str).to_string()
-                      } else {
-                          "".to_string()
-                      };
-                      Value::String(dt_ref)
-                  },
-                  Data::Bool(b) => Value::Bool(*b),
-                  // For other types, convert to string since JSON can't directly represent them as unquoted values
-                  Data::Empty => Value::Null,
-                  _ => Value::String(cell.to_string()),
-                };
-                
-                cells.push(new_cell);
-                c_index += 1;
-              }
-              cells
-            })
-            .collect();
+            if capture_headers && opts.header_row_index() > 0 {
+              
+            }
+            let source_rows  = range.rows();
             let mut sheet_map: Vec<IndexMap<String, Value>> = vec![];
             let mut row_index = 0;
-            for row in sheet_data {
-                if row_index > 0 || opts.omit_header {
-                    sheet_map.push(to_dictionary(&row, &headers))
-                }
-                row_index += 1;
+            for row in source_rows {
+              let cells = workbook_row_to_values(row, opts);
+              sheet_map.push(to_dictionary(&cells, &headers));
+              row_index += 1;
             }
             Ok(DataSet::new(&extract_file_name(path), extension, &headers, &sheet_map, &first_sheet_name, sheet_index, &sheet_names))
         } else {
@@ -121,9 +81,59 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
     }
 }
 
+fn workbook_row_to_values(row: &[Data], opts: &OptionSet) -> Vec<Value> {
+  let mut c_index = 0;
+  let mut cells: Vec<Value> = vec![];
+  for cell in row {
+    let value = workbook_cell_to_value(cell, opts, c_index);
+    cells.push(value);
+    c_index += 1;
+  }
+  cells
+}
+
+fn workbook_cell_to_value(cell:&Data, opts: &OptionSet, c_index: usize) -> Value {
+  let col = opts.column(c_index);
+  let format = if let Some(c) = col {
+    c.format.to_owned()
+  } else {
+    Format::Auto
+  };
+  match cell {
+    Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
+    Data::Float(f) => {
+      match format {
+        Format::Integer => Value::Number(Number::from_i128(*f as i128).unwrap()),
+        _ => Value::Number(Number::from_f64(*f).unwrap())
+      }
+    },
+    Data::DateTimeIso(d) => Value::String(d.to_owned()),
+    Data::DateTime(d) => {
+        let ndt = d.as_datetime();
+        let dt_ref = if let Some(dt) = ndt {
+            let fmt_str = match format {
+              Format::Date => "%Y-%m-%d",
+              _ => if opts.date_only {
+                "%Y-%m-%d"
+              } else {
+                "%Y-%m-%dT%H:%M:%S.000Z"
+              }
+            };
+            dt.format(fmt_str).to_string()
+        } else {
+            "".to_string()
+        };
+        Value::String(dt_ref)
+    },
+    Data::Bool(b) => Value::Bool(*b),
+    // For other types, convert to string since JSON can't directly represent them as unquoted values
+    Data::Empty => Value::Null,
+    _ => Value::String(cell.to_string())
+  }
+}
+
 pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSet, Error> {
     if let Ok(mut rdr)= ReaderBuilder::new().from_path(path) {
-      let columns = opts.columns.clone();
       let capture_header = opts.omit_header == false;
       let mut rows: Vec<IndexMap<String, Value>> = vec![];
       let mut line_count = 0;
@@ -143,35 +153,49 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
       }
       for result in rdr.records() {
         if has_max && line_count >= max_line_usize {
-            break;
+          break;
         }
-        if let Ok(record) = result {
-          let mut row: Vec<Value> = vec![];
-          for cell in record.into_iter() {
-              let new_cell = csv_cell_to_json_value(cell, opts);
-              row.push(new_cell);
-          }
-          // The header row must be in the first 255 line indices
-          if capture_header && !has_headers && line_count == opts.header_row_index() && line_count < 256 {
-            let first_row = row.clone().into_iter().map(|v| v.to_string()).collect::<Vec<String>>();
-            headers = build_header_keys(&first_row, &columns);
-          } else {
-            rows.push(to_dictionary(&row, &headers));
-          }
+        if let Some(row) = csv_row_result_to_values(result, opts) {
+          rows.push(to_dictionary(&row, &headers));
           line_count += 1;
-          }
         }
+      }
        Ok(DataSet::new(&extract_file_name(path), extension, &headers, &rows, "none", 0, &[]))
     } else {
       Err(From::from("Cannot read the CSV file"))
     }
 }
 
-fn csv_cell_to_json_value(cell: &str, opts: &OptionSet) -> Value {
+fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: &OptionSet) -> Option<Vec<Value>> {
+  if let Ok(record) = result {
+    let mut row: Vec<Value> = vec![];
+    let mut ci: usize = 0;
+    for cell in record.into_iter() {
+      let new_cell = csv_cell_to_json_value(cell, opts, ci);
+      row.push(new_cell);
+      ci += 1;
+    }
+    return  Some(row)
+  }
+  None
+}
+
+fn csv_cell_to_json_value(cell: &str, opts: &OptionSet, index: usize) -> Value {
     let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric
+    let col = opts.column(index);
+    let fmt = if let Some(c) = col.cloned() {
+      c.format
+    } else {
+      Format::Auto
+    };
+    let euro_num_mode = if let Some(c) = col.cloned() {
+      c.euro_number_format
+    } else {
+      opts.euro_number_format
+    };
     let num_cell = if has_number {
-        let euro_num_mode = is_euro_number_format(cell, opts.euro_number_format);
+        let euro_num_mode = is_euro_number_format(cell, euro_num_mode);
         if euro_num_mode {
             cell.replace(",", ".").replace(",", ".")
         } else {
@@ -183,7 +207,20 @@ fn csv_cell_to_json_value(cell: &str, opts: &OptionSet) -> Value {
     let mut new_cell = Value::Null;
     if num_cell.len() > 0 && num_cell.is_numeric() {
         if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
-            new_cell = Value::Number(float_val);
+          match fmt {
+            Format::Integer => {
+              if let Some(int_val) = Number::from_i128(float_val.as_i128().unwrap_or(0)) {
+                new_cell = Value::Number(int_val);
+              }
+            },
+            Format::Boolean => {
+              // only 1.0 or more will evaluate as true
+              new_cell = Value::Bool(float_val.as_f64().unwrap_or(0f64) >= 1.0);
+            },
+            _ => {
+              new_cell = Value::Number(float_val);
+            }
+          }
         }
     } else if let Some(is_true) = is_truthy_core(cell, false) {
         new_cell = Value::Bool(is_true);

@@ -36,6 +36,10 @@ impl OptionSet {
     })
   }
 
+  pub fn column(&self, index: usize) -> Option<&Column> {
+    self.columns.get(index)
+  }
+
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
   }
