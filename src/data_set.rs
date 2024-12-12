@@ -57,15 +57,15 @@ pub struct ResultSet {
     pub sheets: Vec<String>,
     pub keys: Vec<String>,
     pub num_rows: usize,
-    pub data: Vec<IndexMap<String, Value>>
+    pub data: Vec<IndexMap<String, Value>>,
 }
 
 impl ResultSet {
     pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet) -> Self {
         let (num_rows, data) = match data_set {
             DataSet::Rows(rows) => (rows.len(), rows),
-            DataSet::Preview(size, rows) => (size, rows),
-            DataSet::Count(size) => (size, vec![])
+            DataSet::Preview(size, rows, iterator) => (size, rows, iterator),
+            DataSet::Count(size, iterator) => (size, vec![], iterator)
         };
         ResultSet {
             extension: info.ext(),
@@ -96,10 +96,10 @@ impl ResultSet {
 
 
 #[derive(Debug, Clone, Serialize)]
-pub enum DataSet {
+pub enum DataSet<T: Iterator> {
    Rows(Vec<IndexMap<String, Value>>),
-   Preview(usize, Vec<IndexMap<String, Value>>),
-   Count(usize) 
+   Preview(usize, Vec<IndexMap<String, Value>>, Option<T>),
+   Count(usize, Option<T>) 
 }
 
 
