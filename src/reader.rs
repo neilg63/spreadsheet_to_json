@@ -17,7 +17,7 @@ use crate::Format;
 use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
 
-pub fn render_spreadsheet(opts: &OptionSet) -> Result<DataSet, Error> {
+pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
     
     if let Some(filepath) = opts.path.clone() {
         let path = Path::new(&filepath);
@@ -38,7 +38,7 @@ pub fn render_spreadsheet(opts: &OptionSet) -> Result<DataSet, Error> {
 }
 
 
-pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSet, Error> {
+pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<ResultSet, Error> {
     if path.exists() == false {
         return Err(From::from("the file $filepath does not exist"));
     }
@@ -80,7 +80,8 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<D
               }
               row_index += 1;
             }
-            Ok(DataSet::new(&extract_file_name(path), extension, &headers, &sheet_map, &first_sheet_name, sheet_index, &sheet_names))
+            let info = WorkbookInfo::new(&extract_file_name(&path), extension, &first_sheet_name, sheet_index, &sheet_names);
+            Ok(ResultSet::new(info, &headers, DataSet::Rows(sheet_map)))
         } else {
             Err(From::from("the workbook does not have any sheets"))
         }
@@ -140,7 +141,7 @@ fn workbook_cell_to_value(cell:&Data, opts: &OptionSet, c_index: usize) -> Value
   }
 }
 
-pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSet, Error> {
+pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<ResultSet, Error> {
     if let Ok(mut rdr)= ReaderBuilder::new().from_path(path) {
       let capture_header = opts.omit_header == false;
       let mut rows: Vec<IndexMap<String, Value>> = vec![];
@@ -166,7 +167,8 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<DataSe
           line_count += 1;
         }
       }
-       Ok(DataSet::new(&extract_file_name(path), extension, &headers, &rows, "none", 0, &[]))
+      let info = WorkbookInfo::simple(&extract_file_name(&path), extension);
+      Ok(ResultSet::new(info, &headers, DataSet::Rows(rows)))
     } else {
       Err(From::from("Cannot read the CSV file"))
     }
