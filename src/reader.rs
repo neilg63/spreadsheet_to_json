@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use calamine::CellType;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use heck::ToSnakeCase;
@@ -14,6 +13,7 @@ use calamine::{open_workbook_auto, Data, Error,Reader};
 use crate::headers::*;
 use crate::data_set::*;
 use crate::is_truthy::is_truthy_core;
+use crate::Extension;
 use crate::Format;
 use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
@@ -63,15 +63,16 @@ pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet
             let mut headers: Vec<String> = vec![];
             let mut has_headers = false;
             let capture_headers = !opts.omit_header;
-            if let Some(first_row) = range.headers() {
-                headers = build_header_keys(&first_row, &columns);
-                has_headers = true;
-            }
             let source_rows  = range.rows();
             let mut sheet_map: Vec<IndexMap<String, Value>> = vec![];
             let mut row_index = 0;
             let header_row_index = opts.header_row_index();
             let match_header_row_below = capture_headers && header_row_index > 0;
+
+            if let Some(first_row) = range.headers() {
+                headers = build_header_keys(&first_row, &columns);
+                has_headers = !match_header_row_below;
+            }
             for row in source_rows {
               if row_index >= max_rows {
                 break;
@@ -79,7 +80,9 @@ pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet
               if match_header_row_below && (row_index + 1) == header_row_index {
                 let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
                 headers = build_header_keys(&h_row, &columns);
+                has_headers = true;
               } else if has_headers || !capture_headers {
+                // only capture rows if headers are either ommitted or have already been captured
                 let cells = workbook_row_to_values(row, opts);
                 sheet_map.push(to_dictionary(&cells, &headers));
               }
@@ -180,7 +183,11 @@ pub fn read_csv(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Err
 }
 
 pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, mode: ReadMode) -> Result<ResultSet, Error> {
-  if let Ok(mut rdr)= ReaderBuilder::new().from_path(path_data.path()) {
+  let separator = match path_data.mode() {
+    Extension::Tsv => b't',
+    _ => b',',
+  };
+  if let Ok(mut rdr)= ReaderBuilder::new().delimiter(separator).from_path(path_data.path()) {
     let capture_header = opts.omit_header == false;
     let mut rows: Vec<IndexMap<String, Value>> = vec![];
     let mut line_count = 0;

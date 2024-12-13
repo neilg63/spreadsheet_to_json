@@ -147,7 +147,7 @@ impl Column {
 
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Extension {
   Unmatched,
   Ods,
@@ -215,6 +215,10 @@ impl<'a> PathData<'a> {
       path,
       ext: Extension::from_path(path)
     }
+  }
+
+  pub fn mode(&self) -> Extension {
+    self.ext
   }
 
   pub fn extension(&self) -> String {
