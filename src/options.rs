@@ -2,7 +2,7 @@ use clap::Error;
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 use crate::headers::*;
-use std::{fs::File, str::FromStr, sync::Arc};
+use std::{fs::File, path::Path, str::FromStr, sync::Arc};
 
 
 #[derive(Debug, Clone)]
@@ -143,6 +143,115 @@ impl Column {
     })
   }
 
+}
+
+
+
+#[derive(Debug, Clone)]
+pub enum Extension {
+  Unmatched,
+  Ods,
+  Xlsx,
+  Xls,
+  Csv,
+  Tsv,
+}
+
+impl Extension {
+  pub fn from_path(path:&Path) -> Extension {
+    if let Some(ext) = path.extension() {
+      if let Some(ext_str) = ext.to_str() {
+        let ext_lc = ext_str.to_lowercase();
+        return match  ext_lc.as_str() {
+          "ods" => Extension::Ods,
+          "xlsx" => Extension::Xlsx,
+          "xls" => Extension::Xls,
+          "csv" => Extension::Csv,
+          "tsv" => Extension::Tsv,
+          _ => Extension::Unmatched
+        }
+      }
+    }
+    Extension::Unmatched
+  }
+
+  fn use_calamine(&self) -> bool {
+    match self {
+      Self::Ods | Self::Xlsx | Self::Xls => true,
+      _ => false
+    }
+  }
+
+  fn use_csv(&self) -> bool {
+    match self {
+      Self::Csv | Self::Tsv => true,
+      _ => false
+    }
+  }
+
+}
+
+impl ToString for Extension {
+  fn to_string(&self) -> String {
+    match self {
+      Self::Ods => "ods",
+      Self::Xlsx => "xlsx",
+      Self::Xls => "xls",
+      Self::Csv => "csv",
+      Self::Tsv => "tsv",
+      _ => ""
+    }.to_string()
+  }
+}
+
+pub struct PathData<'a> {
+  path: &'a Path,
+  ext: Extension
+}
+
+impl<'a> PathData<'a> {
+  pub fn new(path: &'a Path) -> Self {
+    PathData {
+      path,
+      ext: Extension::from_path(path)
+    }
+  }
+
+  pub fn extension(&self) -> String {
+    self.ext.to_string()
+  }
+
+  pub fn path(&self) -> &Path {
+    self.path
+  }
+
+  pub fn is_valid(&self) -> bool {
+    match self.ext {
+      Extension::Unmatched => false,
+      _ => true
+    }
+  }
+
+  pub fn use_calamine(&self) -> bool {
+    self.ext.use_calamine()
+  }
+
+  pub fn filename(&self) -> String {
+    if let Some(file_ref) = self.path.file_name() {
+        file_ref.to_string_lossy().to_string()
+    } else {
+        "".to_owned()
+    }
+}
+}
+
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadMode {
+  Sync,
+  PreviewAsync,
+  Async
 }
 
 

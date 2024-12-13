@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use calamine::CellType;
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use heck::ToSnakeCase;
@@ -16,6 +17,8 @@ use crate::is_truthy::is_truthy_core;
 use crate::Format;
 use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
+use crate::PathData;
+use crate::ReadMode;
 
 pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
     
@@ -26,11 +29,15 @@ pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
             let fpath = canonical_path.to_str().unwrap_or("");
             return Err(From::from("The file $fpath is not available"));
         }
-        let extension = filepath.to_end(".").to_lowercase();
-        match extension.as_str() {
-            "xlsx" | "xls" | "ods" => read_workbook(path, &extension, opts),
-            "csv" => read_csv(path, &extension, opts),
-            _ => Err(From::from("Unsupported format"))
+        let path_data = PathData::new(path);
+        if path_data.is_valid() {
+          if path_data.use_calamine() {
+            read_workbook(&path_data, opts)
+          } else {
+            read_csv(&path_data, opts)
+          }
+        } else {
+          Err(From::from("Unsupported format"))
         }
     } else {
         Err(From::from("No file path specified"))
@@ -38,11 +45,9 @@ pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
 }
 
 
-pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<ResultSet, Error> {
-    if path.exists() == false {
-        return Err(From::from("the file $filepath does not exist"));
-    }
-    if let Ok(mut workbook) = open_workbook_auto(path) {
+pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Error> {
+
+    if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
       let columns = opts.columns.clone();
       let max_rows = opts.max_rows();
         let mut sheet_index = opts.index as usize;
@@ -80,7 +85,7 @@ pub fn read_workbook(path: &Path, extension: &str, opts: &OptionSet) -> Result<R
               }
               row_index += 1;
             }
-            let info = WorkbookInfo::new(&extract_file_name(&path), extension, &first_sheet_name, sheet_index, &sheet_names);
+            let info = WorkbookInfo::new(path_data, &first_sheet_name, sheet_index, &sheet_names);
             Ok(ResultSet::new(info, &headers, DataSet::Rows(sheet_map)))
         } else {
             Err(From::from("the workbook does not have any sheets"))
@@ -141,8 +146,8 @@ fn workbook_cell_to_value(cell:&Data, opts: &OptionSet, c_index: usize) -> Value
   }
 }
 
-pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<ResultSet, Error> {
-    if let Ok(mut rdr)= ReaderBuilder::new().from_path(path) {
+pub fn read_csv(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Error> {
+    if let Ok(mut rdr)= ReaderBuilder::new().from_path(path_data.path()) {
       let capture_header = opts.omit_header == false;
       let mut rows: Vec<IndexMap<String, Value>> = vec![];
       let mut line_count = 0;
@@ -167,11 +172,67 @@ pub fn read_csv(path: &Path, extension: &str, opts: &OptionSet) -> Result<Result
           line_count += 1;
         }
       }
-      let info = WorkbookInfo::simple(&extract_file_name(&path), extension);
+      let info = WorkbookInfo::simple(path_data);
       Ok(ResultSet::new(info, &headers, DataSet::Rows(rows)))
     } else {
       Err(From::from("Cannot read the CSV file"))
     }
+}
+
+pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, mode: ReadMode) -> Result<ResultSet, Error> {
+  if let Ok(mut rdr)= ReaderBuilder::new().from_path(path_data.path()) {
+    let capture_header = opts.omit_header == false;
+    let mut rows: Vec<IndexMap<String, Value>> = vec![];
+    let mut line_count = 0;
+    let has_max = opts.max.is_some();
+    let mut max_line_usize = opts.max_rows();
+    let mut headers: Vec<String> = vec![];
+    // let mut has_headers = false;
+    let capture_rows = match mode {
+      ReadMode::Async => false,
+      _ => false
+    };
+    if mode == ReadMode::PreviewAsync {
+      max_line_usize = 20;
+    }
+    if capture_header {
+      if let Ok(hdrs) = rdr.headers() {
+          headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
+          // has_headers = true;
+      }
+      let columns = opts.columns.clone();
+      headers = build_header_keys(&headers, &columns);
+    }
+    let total = if capture_rows {
+      0
+    } else {
+      rdr.records().count()
+    };
+    if capture_rows {
+      for result in rdr.records() {
+        if has_max && line_count >= max_line_usize {
+          break;
+        }
+        if let Some(row) = csv_row_result_to_values(result, opts) {
+          rows.push(to_dictionary(&row, &headers));
+          line_count += 1;
+        }
+      }
+    } else {
+      // spawn separate process possibly via an optional callback function
+    }
+    
+
+    let info = WorkbookInfo::simple(path_data);
+    let ds = match mode {
+      ReadMode::Sync => DataSet::Rows(rows),
+      ReadMode::PreviewAsync => DataSet::Preview(total, rows),
+      ReadMode::Async => DataSet::Count(total)
+    };
+    Ok(ResultSet::new(info, &headers, ds))
+  } else {
+    Err(From::from("Cannot read the CSV file"))
+  }
 }
 
 fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: &OptionSet) -> Option<Vec<Value>> {
@@ -240,10 +301,4 @@ fn csv_cell_to_json_value(cell: &str, opts: &OptionSet, index: usize) -> Value {
 
 
 
-pub fn extract_file_name(path: &Path) -> String {
-    if let Some(file_ref) = path.file_name() {
-        file_ref.to_string_lossy().to_string()
-    } else {
-        "".to_owned()
-    }
-}
+

@@ -2,6 +2,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::PathData;
+
 
 
 #[derive(Debug, Clone)]
@@ -13,20 +15,20 @@ pub struct WorkbookInfo {
 }
 
 impl WorkbookInfo {
-    pub fn new(name: &str, extension: &str, sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
+    pub fn new(path_data: &PathData, sheet: &str, sheet_index: usize, sheet_refs: &[String]) -> Self {
         WorkbookInfo {
-            extension: extension.to_owned(),
-            filename: name.to_owned(), 
+            extension: path_data.extension(),
+            filename: path_data.filename(), 
             sheet: (sheet.to_owned(), sheet_index),
             sheets: sheet_refs.to_vec(),
         }
     }
 
-    pub fn simple(name: &str, extension: &str) -> Self {
+    pub fn simple(path_data: &PathData) -> Self {
         let sheet_name = "single";
         WorkbookInfo {
-            extension: extension.to_owned(),
-            filename: name.to_owned(), 
+            extension: path_data.extension(),
+            filename: path_data.filename(), 
             sheet: (sheet_name.to_owned(), 0),
             sheets: vec![sheet_name.to_owned()],
         }
@@ -64,8 +66,8 @@ impl ResultSet {
     pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet) -> Self {
         let (num_rows, data) = match data_set {
             DataSet::Rows(rows) => (rows.len(), rows),
-            DataSet::Preview(size, rows, iterator) => (size, rows, iterator),
-            DataSet::Count(size, iterator) => (size, vec![], iterator)
+            DataSet::Preview(size, rows) => (size, rows),
+            DataSet::Count(size) => (size, vec![])
         };
         ResultSet {
             extension: info.ext(),
@@ -96,10 +98,10 @@ impl ResultSet {
 
 
 #[derive(Debug, Clone, Serialize)]
-pub enum DataSet<T: Iterator> {
+pub enum DataSet {
    Rows(Vec<IndexMap<String, Value>>),
-   Preview(usize, Vec<IndexMap<String, Value>>, Option<T>),
-   Count(usize, Option<T>) 
+   Preview(usize, Vec<IndexMap<String, Value>>),
+   Count(usize) 
 }
 
 
@@ -114,3 +116,4 @@ pub fn to_dictionary(row: &[serde_json::Value], headers: &[String]) -> IndexMap<
     }
     hm
 }
+
