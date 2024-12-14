@@ -1,8 +1,10 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use csv::ReaderBuilder;
 use csv::StringRecord;
 use heck::ToSnakeCase;
+use tokio::sync::mpsc;
 use serde_json::{Number, Value};
 use simple_string_patterns::*;
 use indexmap::IndexMap;
@@ -19,6 +21,7 @@ use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
 use crate::PathData;
 use crate::ReadMode;
+use crate::RowOptionSet;
 
 pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
     
@@ -48,7 +51,7 @@ pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
 pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Error> {
 
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
-      let columns = opts.columns.clone();
+      let columns = opts.rows.columns.clone();
       let max_rows = opts.max_rows();
         let mut sheet_index = opts.index as usize;
         let sheet_names = workbook.worksheets().into_iter().map(|ws| ws.0).collect::<Vec<String>>();
@@ -89,7 +92,7 @@ pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet
               row_index += 1;
             }
             let info = WorkbookInfo::new(path_data, &first_sheet_name, sheet_index, &sheet_names);
-            Ok(ResultSet::new(info, &headers, DataSet::Rows(sheet_map)))
+            Ok(ResultSet::new(info, &headers, DataSet::Rows(sheet_map), None))
         } else {
             Err(From::from("the workbook does not have any sheets"))
         }
@@ -102,14 +105,14 @@ fn workbook_row_to_values(row: &[Data], opts: &OptionSet) -> Vec<Value> {
   let mut c_index = 0;
   let mut cells: Vec<Value> = vec![];
   for cell in row {
-    let value = workbook_cell_to_value(cell, opts, c_index);
+    let value = workbook_cell_to_value(cell, Arc::new(&opts.rows), c_index);
     cells.push(value);
     c_index += 1;
   }
   cells
 }
 
-fn workbook_cell_to_value(cell:&Data, opts: &OptionSet, c_index: usize) -> Value {
+fn workbook_cell_to_value(cell:&Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
   let col = opts.column(c_index);
   let format = if let Some(c) = col {
     c.format.to_owned()
@@ -163,26 +166,28 @@ pub fn read_csv(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Err
             headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
             // has_headers = true;
         }
-        let columns = opts.columns.clone();
+        let columns = opts.columns();
         headers = build_header_keys(&headers, &columns);
       }
       for result in rdr.records() {
         if has_max && line_count >= max_line_usize {
           break;
         }
-        if let Some(row) = csv_row_result_to_values(result, opts) {
+        if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
           rows.push(to_dictionary(&row, &headers));
           line_count += 1;
         }
       }
       let info = WorkbookInfo::simple(path_data);
-      Ok(ResultSet::new(info, &headers, DataSet::Rows(rows)))
+      Ok(ResultSet::new(info, &headers, DataSet::Rows(rows), None))
     } else {
       Err(From::from("Cannot read the CSV file"))
     }
 }
 
-pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, mode: ReadMode) -> Result<ResultSet, Error> {
+pub async fn read_csv_core<'a, F>(path_data: &PathData<'a>, opts: &OptionSet, save_opt: Option<F>)  -> Result<ResultSet, Error> 
+  where 
+  F: Fn(IndexMap<String, Value>) -> Result<(), Error>, {
   let separator = match path_data.mode() {
     Extension::Tsv => b't',
     _ => b',',
@@ -195,19 +200,13 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, mode:
     let mut max_line_usize = opts.max_rows();
     let mut headers: Vec<String> = vec![];
     // let mut has_headers = false;
-    let capture_rows = match mode {
-      ReadMode::Async => false,
-      _ => false
-    };
-    if mode == ReadMode::PreviewAsync {
-      max_line_usize = 20;
-    }
+    let capture_rows = opts.capture_rows();
     if capture_header {
       if let Ok(hdrs) = rdr.headers() {
           headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
           // has_headers = true;
       }
-      let columns = opts.columns.clone();
+      let columns = opts.rows.columns.clone();
       headers = build_header_keys(&headers, &columns);
     }
     let total = if capture_rows {
@@ -220,34 +219,53 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, mode:
         if has_max && line_count >= max_line_usize {
           break;
         }
-        if let Some(row) = csv_row_result_to_values(result, opts) {
+        if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
           rows.push(to_dictionary(&row, &headers));
           line_count += 1;
         }
       }
     } else {
-      // spawn separate process possibly via an optional callback function
-    }
-    
+      // Spawn a task to read from CSV and save data row by row
+      if let Some(save_method) = save_opt {
+        let (tx, mut rx) = mpsc::channel(32);
+        let opts = Arc::new(opts.clone()); // Clone opts if possible, or wrap in Arc
+        let headers = headers.clone();     // Clone headers since it's used in the task
+        tokio::spawn(async move {
+          for result in rdr.records() {
+              if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
+                  let row_map = to_dictionary(&row, &headers);
+                  if tx.send(row_map).await.is_err() {
+                      // Channel closed, stop sending
+                      break;
+                  }
+              }
+          }
+        });
 
+        // Process the rows as they come in
+        while let Some(row) = rx.recv().await {
+            save_method(row)?;
+        }
+      }
+    }
     let info = WorkbookInfo::simple(path_data);
-    let ds = match mode {
+    let ds = match opts.read_mode() {
       ReadMode::Sync => DataSet::Rows(rows),
       ReadMode::PreviewAsync => DataSet::Preview(total, rows),
       ReadMode::Async => DataSet::Count(total)
     };
-    Ok(ResultSet::new(info, &headers, ds))
+    Ok(ResultSet::new(info, &headers, ds, None))
   } else {
     Err(From::from("Cannot read the CSV file"))
   }
 }
 
-fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: &OptionSet) -> Option<Vec<Value>> {
+fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: Arc<&RowOptionSet>) -> Option<Vec<Value>> {
   if let Ok(record) = result {
     let mut row: Vec<Value> = vec![];
     let mut ci: usize = 0;
     for cell in record.into_iter() {
-      let new_cell = csv_cell_to_json_value(cell, opts, ci);
+      let new_cell = csv_cell_to_json_value(cell, opts.clone(), ci);
       row.push(new_cell);
       ci += 1;
     }
@@ -256,7 +274,7 @@ fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: &Opt
   None
 }
 
-fn csv_cell_to_json_value(cell: &str, opts: &OptionSet, index: usize) -> Value {
+fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) -> Value {
     let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric
     let col = opts.column(index);

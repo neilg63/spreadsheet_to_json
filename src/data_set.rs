@@ -60,10 +60,11 @@ pub struct ResultSet {
     pub keys: Vec<String>,
     pub num_rows: usize,
     pub data: Vec<IndexMap<String, Value>>,
+    pub out_ref: Option<String>
 }
 
 impl ResultSet {
-    pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet) -> Self {
+    pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet, out_ref: Option<&str>) -> Self {
         let (num_rows, data) = match data_set {
             DataSet::Rows(rows) => (rows.len(), rows),
             DataSet::Preview(size, rows) => (size, rows),
@@ -76,12 +77,13 @@ impl ResultSet {
             sheets: info.sheets(),
             keys: keys.to_vec(),
             num_rows,
-            data
+            data,
+            out_ref: out_ref.map(|s| s.to_string())
         }
     }
 
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut result = json!({
             "name": self.filename,
             "extension": self.extension,
             "sheet": {
@@ -91,8 +93,12 @@ impl ResultSet {
             "sheets": self.sheets,
             "fields": self.keys,
             "num_rows": self.num_rows,
-            "data": self.data
-        })
+            "data": self.data,
+        });
+        if let Some(out_ref_str) = self.out_ref.clone() {
+            result["outref"] = json!(out_ref_str);
+        }
+        result
     }
 }
 

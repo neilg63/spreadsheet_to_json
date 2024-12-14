@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use clap::Parser;
 use heck::ToSnakeCase;
-use serde_json::{Number, Value};
-use crate::{options::{Column, OptionSet}, Format, is_truthy::*};
+use serde_json::{de::Read, Number, Value};
+use crate::{is_truthy::*, options::{Column, OptionSet}, Format, ReadMode};
 use simple_string_patterns::ToSegments;
 
 /// Command line arguments configuration
@@ -39,6 +39,12 @@ pub struct Args {
 
   #[clap(short = 'x',long, value_parser, default_value_t = false) ]
   pub exclude_cells: bool, // test validity only and show options
+
+  #[clap(short = 'd',long, value_parser, default_value_t = false) ]
+  pub deferred: bool, // test validity only and show options
+
+  #[clap(short = 'p',long, value_parser, default_value_t = false) ]
+  pub preview: bool, // test validity only and show options
 
 }
 
@@ -80,16 +86,26 @@ impl FromArgs for OptionSet {
             index += 1;
         }
     }
+    let read_mode = if args.preview {
+        ReadMode::PreviewAsync
+    } else if args.deferred {
+        ReadMode::Async
+    } else {
+        ReadMode::Sync
+    };
     OptionSet {
         sheet: args.sheet.clone(),
         index: args.index,
         path: args.path.clone(),
-        euro_number_format: args.euro_number_format,
-        date_only: args.date_only,
-        columns,
         max: args.max,
         header_row: args.header_row,
-        omit_header: args.omit_header
+        omit_header: args.omit_header,
+        rows: crate::RowOptionSet { 
+            euro_number_format: args.euro_number_format,
+            date_only: args.date_only,
+            columns,
+        },
+        read_mode 
     }
     }
 }

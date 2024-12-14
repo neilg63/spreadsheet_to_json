@@ -5,18 +5,30 @@ use crate::headers::*;
 use std::{fs::File, path::Path, str::FromStr, sync::Arc};
 
 
+
+#[derive(Debug, Clone)]
+pub struct RowOptionSet {
+  pub euro_number_format: bool, // always parse as euro number format
+  pub date_only: bool,
+  pub columns: Vec<Column>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OptionSet {
   pub sheet: Option<String>, // Optional sheet name reference. Will default to index value if not matched
   pub index: u32, // worksheet index
   pub path: Option<String>, // path argument. If None, do not attempt to parse
-  pub euro_number_format: bool, // always parse as euro number format
-  pub date_only: bool,
-  pub columns: Vec<Column>,
+  pub rows: RowOptionSet,
   pub max: Option<u32>,
-  pub header_row: u8,
   pub omit_header: bool,
+  pub header_row: u8,
+  pub read_mode: ReadMode,
+}
 
+impl RowOptionSet {
+  pub fn column(&self, index: usize) -> Option<&Column> {
+    self.columns.get(index)
+  }
 }
 
 impl OptionSet {
@@ -27,28 +39,44 @@ impl OptionSet {
         "index": self.index,
       },
       "path": self.path.clone().unwrap_or("".to_string()),
-      "euro_number_format": self.euro_number_format,
-      "date_only": self.date_only,
-      "columns": self.columns.clone().into_iter().map(|c| c.to_json()).collect::<Vec<Value>>(),
+      "euro_number_format": self.rows.euro_number_format,
+      "date_only": self.rows.date_only,
+      "columns": self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect::<Vec<Value>>(),
       "max": self.max.unwrap_or(0),
       "header_row": self.header_row,
-      "omit_header": self.omit_header
+      "omit_header": self.omit_header,
     })
   }
 
-  pub fn column(&self, index: usize) -> Option<&Column> {
-    self.columns.get(index)
-  }
+  
 
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
   }
 
   pub fn max_rows(&self) -> usize {
+    if self.read_mode == ReadMode::PreviewAsync {
+      return 20
+    }
     if let Some(mr) = self.max {
       mr as usize
     } else {
       default_max_rows()
+    }
+  }
+
+  pub fn columns(&self) -> Vec<Column> {
+    self.rows.columns.clone()
+  }
+
+  pub fn read_mode(&self) -> ReadMode {
+    self.read_mode.clone()
+  }
+
+  pub fn capture_rows(&self) -> bool {
+    match self.read_mode {
+      ReadMode::Async => false,
+      _ => false
     }
   }
 }
