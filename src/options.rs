@@ -2,6 +2,7 @@ use serde_json::{json, Error, Value};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
 
+/// Row parsing options with nested column options
 #[derive(Debug, Clone)]
 pub struct RowOptionSet {
   pub euro_number_format: bool, // always parse as euro number format
@@ -15,6 +16,7 @@ impl RowOptionSet {
   }
 }
 
+/// Core options with nested row options
 #[derive(Debug, Clone)]
 pub struct OptionSet {
   pub sheet: Option<String>, // Optional sheet name reference. Will default to index value if not matched
@@ -47,11 +49,12 @@ impl OptionSet {
   }
 
   
-
+  /// header row index as usize
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
   }
 
+  /// set the maximum of rows to be output synchronously
   pub fn max_rows(&self) -> usize {
     if self.read_mode == ReadMode::PreviewAsync {
       return 20
@@ -84,18 +87,19 @@ impl OptionSet {
 }
 
 
+/// Cell format overrides
 #[derive(Debug, Clone)]
 pub enum Format {
-  Auto,
-  Text,
-  Integer,
-  Decimal(u8),
-  Boolean,
-  Date,
-  DateTime,
-  Truthy,
+  Auto, // automatic interpretation
+  Text, // text
+  Integer, // integer only
+  Decimal(u8), // decimal to stated precision
+  Boolean, // Boolean or  cast to boolean from integers
+  Date, // Interpret as date only
+  DateTime, // Interpret as full datetime
+  Truthy, // interpret common yes/no, y/n, true/false text strings as true/false
   #[allow(dead_code)]
-  TruthyCustom(Arc<str>, Arc<str>)
+  TruthyCustom(Arc<str>, Arc<str>) // define custom yes/no values
 }
 
 impl ToString for Format {

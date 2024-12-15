@@ -4,7 +4,7 @@ description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as
 repository = "https://github.com/neilg63/to-offset"
 version = "0.1.0"
 edition = "2021"
-categories = ["data-structures"]
+categories = ["data-structures", "parsing", "text-processing"]
 license = "GPL-2.0-or-later WITH Bison-exception-2.2"
 
 [dependencies]
