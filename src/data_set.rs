@@ -103,6 +103,16 @@ impl ResultSet {
         }
         result
     }
+
+    /// final output as vector of JSON-serializable array
+    pub fn rows(&self) -> Vec<String> {
+      let mut lines = Vec::with_capacity(self.data.len());
+      for row in &self.data {
+        lines.push(json!(row).to_string());
+      }
+      lines
+    }
+
 }
 
 
@@ -113,8 +123,8 @@ pub enum DataSet {
 }
 
 impl DataSet {
-  pub fn from_count_and_rows(count: usize, rows: Vec<IndexMap<String, Value>>, read_mode: ReadMode) -> Self {
-    match read_mode {
+  pub fn from_count_and_rows(count: usize, rows: Vec<IndexMap<String, Value>>, opts: &OptionSet) -> Self {
+    match opts.read_mode() {
       ReadMode::Sync | ReadMode::PreviewAsync => DataSet::WithRows(count, rows),
       ReadMode::Async => DataSet::Count(count),
     }

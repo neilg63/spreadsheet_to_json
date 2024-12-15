@@ -47,6 +47,9 @@ pub struct Args {
   pub preview: bool, // test validity only and show options
 
   #[clap(long, value_parser, default_value_t = false) ]
+  pub jsonl: bool, // debug mode
+
+  #[clap(long, value_parser, default_value_t = false) ]
   pub debug: bool, // debug mode
 
 }
@@ -107,6 +110,7 @@ impl FromArgs for OptionSet {
             date_only: args.date_only,
             columns,
         },
+        jsonl: args.jsonl,
         read_mode 
     }
     }

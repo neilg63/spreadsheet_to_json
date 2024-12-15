@@ -23,11 +23,16 @@ async fn main() -> Result<(), Error> {
     if args.debug {
         env::set_var("RUST_BACKTRACE", "1");
     }
-    
+    let mut output_lines = false;
+    let mut lines: Option<String> = None;
     let result = render_spreadsheet_direct(&opts).await;
     let json_value = match result {
         Err(msg) => json!{ { "error": true, "message": msg.to_string(), "options": opts.to_json() } },
         Ok(data_set) => {
+            output_lines = args.jsonl;
+            if output_lines {
+                lines = Some(data_set.rows().join("\n"));
+            }
             if args.exclude_cells {
                 json!({
                     "options": opts.to_json() 
@@ -37,7 +42,12 @@ async fn main() -> Result<(), Error> {
             }
         }
     };
-
-    println!("{}", json_value);
+    if output_lines {
+        if let Some(lines_string) = lines {
+            println!("{}", lines_string);
+        }
+    } else {
+        println!("{}", json_value);
+    }
     Ok(())
 }

@@ -50,10 +50,10 @@ pub async fn render_spreadsheet_core(
           read_csv_core(&path_data, opts, save_opt, out_ref).await
         }
       } else {
-        Err(From::from("Unsupported format"))
+        Err(From::from("unsupported_format"))
       }
   } else {
-      Err(From::from("No file path specified"))
+      Err(From::from("no_filepath_specified"))
   }
 }
 
@@ -134,13 +134,13 @@ pub async fn read_workbook_core<'a>(
         }
       }
       let info = WorkbookInfo::new(path_data, &first_sheet_name, sheet_index, &sheet_names);
-      let ds = DataSet::from_count_and_rows(total, rows, opts.read_mode());
+      let ds = DataSet::from_count_and_rows(total, rows, opts);
       Ok(ResultSet::new(info, &headers, ds, out_ref))
     } else {
-      Err(From::from("the workbook does not have any sheets"))
+      Err(From::from("workbook_with_no_sheets"))
     }
   } else {
-    Err(From::from("Cannot open the workbook"))
+    Err(From::from("cannot_open_workbook"))
   }
 }
   
@@ -267,10 +267,14 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_
       }
     }
     let info = WorkbookInfo::simple(path_data);
-    let ds = DataSet::from_count_and_rows(total, rows, opts.read_mode());
+    let ds = DataSet::from_count_and_rows(total, rows, opts);
     Ok(ResultSet::new(info, &headers, ds, out_ref))
   } else {
-    Err(From::from("Cannot read the CSV file"))
+    let error_msg = match path_data.ext() {
+      Extension::Tsv => "unreadable_tsv_file",
+      _ => "unreadable_csv_file"
+    };
+    Err(From::from(error_msg))
   }
 }
 

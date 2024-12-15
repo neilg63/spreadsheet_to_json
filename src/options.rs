@@ -18,6 +18,7 @@ pub struct OptionSet {
   pub index: u32, // worksheet index
   pub path: Option<String>, // path argument. If None, do not attempt to parse
   pub rows: RowOptionSet,
+  pub jsonl: bool,
   pub max: Option<u32>,
   pub omit_header: bool,
   pub header_row: u8,
@@ -44,6 +45,7 @@ impl OptionSet {
       "max": self.max.unwrap_or(0),
       "header_row": self.header_row,
       "omit_header": self.omit_header,
+      "jsonl": self.jsonl
     })
   }
 
@@ -273,6 +275,10 @@ impl<'a> PathData<'a> {
 
   pub fn extension(&self) -> String {
     self.ext.to_string()
+  }
+
+  pub fn ext(&self) -> Extension {
+    self.ext
   }
 
   pub fn path(&self) -> &Path {
