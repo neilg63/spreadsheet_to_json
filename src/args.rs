@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use clap::Parser;
 use heck::ToSnakeCase;
-use serde_json::{de::Read, Number, Value};
+use serde_json::{Number, Value};
 use crate::{is_truthy::*, options::{Column, OptionSet}, Format, ReadMode};
 use simple_string_patterns::ToSegments;
 

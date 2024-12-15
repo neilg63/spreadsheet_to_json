@@ -22,30 +22,9 @@ use crate::euro_number_format::is_euro_number_format;
 use crate::PathData;
 use crate::RowOptionSet;
 
-/* pub fn render_spreadsheet(opts: &OptionSet) -> Result<ResultSet, Error> {
-    
-    if let Some(filepath) = opts.path.clone() {
-        let path = Path::new(&filepath);
-        if !path.exists() {
-            let canonical_path = path.canonicalize()?;
-            let fpath = canonical_path.to_str().unwrap_or("");
-            return Err(From::from("The file $fpath is not available"));
-        }
-        let path_data = PathData::new(path);
-        if path_data.is_valid() {
-          if path_data.use_calamine() {
-            read_workbook(&path_data, opts)
-          } else {
-            read_csv(&path_data, opts)
-          }
-        } else {
-          Err(From::from("Unsupported format"))
-        }
-    } else {
-        Err(From::from("No file path specified"))
-    }
-} */
 
+/// Output the result set with captured rows (up to the maximum allowed) directly
+/// this is still asynchronous as it's a wrapper for a function accepting multithreaded async callbacks
 pub async fn render_spreadsheet_direct(
   opts: &OptionSet) -> Result<ResultSet, Error> {  
   render_spreadsheet_core(opts, None, None).await
@@ -60,9 +39,8 @@ pub async fn render_spreadsheet_core(
   if let Some(filepath) = opts.path.clone() {
       let path = Path::new(&filepath);
       if !path.exists() {
-          let canonical_path = path.canonicalize()?;
-          let fpath = canonical_path.to_str().unwrap_or("");
-          return Err(From::from("The file $fpath is not available"));
+          #[allow(dead_code)]
+          return Err(From::from("The file is not available"));
       }
       let path_data = PathData::new(path);
       if path_data.is_valid() {
@@ -79,56 +57,8 @@ pub async fn render_spreadsheet_core(
   }
 }
 
-/* 
-pub fn read_workbook(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Error> {
 
-    if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
-      let columns = opts.rows.columns.clone();
-      let max_rows = opts.max_rows();
-        let (sheet_name_opt, sheet_names, sheet_index) = match_sheet_name_and_index(&mut workbook, opts);
-        if let Some(first_sheet_name) = sheet_name_opt {
-            let range = workbook.worksheet_range(&first_sheet_name)?;
-            let mut headers: Vec<String> = vec![];
-            let mut has_headers = false;
-            let capture_headers = !opts.omit_header;
-            let source_rows  = range.rows();
-            let mut sheet_map: Vec<IndexMap<String, Value>> = vec![];
-            let mut row_index = 0;
-            let header_row_index = opts.header_row_index();
-            let match_header_row_below = capture_headers && header_row_index > 0;
-
-            if let Some(first_row) = range.headers() {
-                headers = build_header_keys(&first_row, &columns);
-                has_headers = !match_header_row_below;
-            }
-            let total = source_rows.clone().count();
-            for row in source_rows {
-              if row_index >= max_rows {
-                break;
-              }
-              if match_header_row_below && (row_index + 1) == header_row_index {
-                let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
-                headers = build_header_keys(&h_row, &columns);
-                has_headers = true;
-              } else if has_headers || !capture_headers {
-                // only capture rows if headers are either ommitted or have already been captured
-                let cells = workbook_row_to_values(row, &opts.rows);
-                sheet_map.push(to_index_map(&cells, &headers));
-              }
-              row_index += 1;
-            }
-            let info = WorkbookInfo::new(path_data, &first_sheet_name, sheet_index, &sheet_names);
-            Ok(ResultSet::new(info, &headers, DataSet::WithRows(total, sheet_map), None))
-        } else {
-            Err(From::from("the workbook does not have any sheets"))
-        }
-    }  else {
-        Err(From::from("Cannot open the workbook"))
-    }
-}
- */
-
-// Supports asynchronous handling of large spreadsheets
+/// Supports asynchronous handling of large spreadsheets
 pub async fn read_workbook_core<'a>(
     path_data: &PathData<'a>, opts: &OptionSet,
     save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>,
@@ -269,41 +199,8 @@ fn workbook_cell_to_value(cell:&Data, opts: Arc<&RowOptionSet>, c_index: usize) 
     _ => Value::String(cell.to_string())
   }
 }
-/* 
-pub fn read_csv(path_data: &PathData, opts: &OptionSet) -> Result<ResultSet, Error> {
-    if let Ok(mut rdr)= ReaderBuilder::new().from_path(path_data.path()) {
-      let capture_header = opts.omit_header == false;
-      let mut rows: Vec<IndexMap<String, Value>> = vec![];
-      let mut line_count = 0;
-      let has_max = opts.max.is_some();
-      let max_line_usize = opts.max_rows();
-      let mut headers: Vec<String> = vec![];
-      // let mut has_headers = false;
-      if capture_header {
-        if let Ok(hdrs) = rdr.headers() {
-            headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
-            // has_headers = true;
-        }
-        let columns = opts.columns();
-        headers = build_header_keys(&headers, &columns);
-      }
-      for result in rdr.records() {
-        if has_max && line_count >= max_line_usize {
-          break;
-        }
-        if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
-          rows.push(to_index_map(&row, &headers));
-          line_count += 1;
-        }
-      }
-      let total = line_count + rdr.records().count() + 1;
-      let info = WorkbookInfo::simple(path_data);
-      Ok(ResultSet::new(info, &headers, DataSet::WithRows(total, rows), None))
-    } else {
-      Err(From::from("Cannot read the CSV file"))
-    }
-} */
 
+/// process CSV file asynchronously with optional row save method amd output reference (file or database table reference)
 pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>, out_ref: Option<&str>)  -> Result<ResultSet, Error> 
   {
   let separator = match path_data.mode() {
@@ -329,7 +226,7 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_
       headers = build_header_keys(&headers, &columns);
     }
     
-    let mut total = 0;;
+    let mut total = 0;
     if capture_rows {
       for result in rdr.records() {
         if has_max && line_count >= max_line_usize {

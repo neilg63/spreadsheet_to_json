@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use simple_string_patterns::*;
 
 /// Only match string representations of booleans, integers or floats
@@ -39,28 +41,31 @@ pub fn is_truthy_standard(txt: &str, empty_is_false: bool) -> Option<bool> {
   }
 }
 
-pub fn is_truthy_custom(txt: &str, opts: &[(bool, &str, bool, bool)], use_defaults: bool, empty_is_false: bool) -> Option<bool> {
+
+#[allow(dead_code)]
+pub fn is_truthy_custom(txt: &str, opts: &[TruthyOption], use_defaults: bool, empty_is_false: bool) -> Option<bool> {
   // Will return the first matched letter sequence
   let txt = txt.trim();
-  for &(is_true, letters, case_sensitive, starts_with) in opts {
-    if starts_with {
-      if case_sensitive {
-        if txt.starts_with(letters) {
-          return Some(is_true)
+  for opt in opts {
+    let letters = opt.sample();
+    if opt.starts_with {
+      if opt.case_sensitive {
+        if txt.starts_with(&letters) {
+          return Some(opt.is_true)
         }
       } else {
-        if txt.starts_with_ci_alphanum(letters) {
-          return Some(is_true)
+        if txt.starts_with_ci_alphanum(&letters) {
+          return Some(opt.is_true)
         }
       }
     } else {
-      if case_sensitive {
+      if opt.case_sensitive {
         if txt == letters {
-          return Some(is_true)
+          return Some(opt.is_true)
         }
       } else {
         if txt.to_lowercase() == letters.to_lowercase() {
-          return Some(is_true);
+          return Some(opt.is_true);
         }
       }
     }
@@ -70,6 +75,51 @@ pub fn is_truthy_custom(txt: &str, opts: &[(bool, &str, bool, bool)], use_defaul
   } else {
     None
   }
+}
+
+#[derive(Debug)]
+pub struct TruthyOption {
+  pub is_true: bool,
+  pub pattern: Arc<str>,
+  pub case_sensitive: bool,
+  pub starts_with: bool
+}
+
+impl TruthyOption {
+  pub fn new(is_true: bool, pattern: &str, case_sensitive: bool, starts_with: bool) -> Self {
+    Self {
+      is_true,
+      pattern: Arc::from(pattern),
+      case_sensitive,
+      starts_with
+    }
+  }
+
+  pub fn sample(&self) -> String {
+    self.pattern.to_string()
+  }
+}
+
+
+#[allow(dead_code)]
+pub fn split_truthy_custom_option_str(custom_str: &str, case_sensitive: bool, starts_with: bool) -> Vec<TruthyOption> {
+  let parts = custom_str.to_segments(",");
+  let mut matchers:Vec<TruthyOption> = vec![];
+  if parts.len() > 2 {
+    if let Some(first) = parts.get(0) {
+      if first.starts_with_ci_alphanum("tru") {
+        let yes_parts = parts.get(1).unwrap_or(&"".to_string()).to_segments("|");
+        let no_parts = parts.get(2).unwrap_or(&"".to_string()).to_segments("|");
+        for match_str in yes_parts {
+          matchers.push(TruthyOption::new(true, &match_str, case_sensitive, starts_with));
+        }
+        for match_str in no_parts {
+          matchers.push(TruthyOption::new(false, &match_str, case_sensitive, starts_with));
+        }
+      }
+    }
+  }
+  matchers
 }
 
 
@@ -104,12 +154,10 @@ mod tests {
 
   #[test]
   fn test_truthy_custom() {
-    let custom_flags = [
-      (true, "si", false, false),
-      (true, "vero", false, false),
-      (false, "no", false, false),
-      (false, "falso", false, false),
-    ];
+
+    let custom_setting_str = "truthy,si|vero,no|falso";
+    let custom_flags = split_truthy_custom_option_str(custom_setting_str, false, false);
+
     // yes will be neither true nor false, because we're using custom true/false flags
     let sample = "yes";
     assert_eq!(is_truthy_custom(sample, &custom_flags, true, false), None);

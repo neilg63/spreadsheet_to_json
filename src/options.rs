@@ -64,14 +64,18 @@ impl OptionSet {
     }
   }
 
+  /// future development with advanced column options
+  #[allow(dead_code)]
   pub fn columns(&self) -> Vec<Column> {
     self.rows.columns.clone()
   }
 
+  /// cloned read mode
   pub fn read_mode(&self) -> ReadMode {
     self.read_mode.clone()
   }
 
+  // Should rows be captured synchronously
   pub fn capture_rows(&self) -> bool {
     match self.read_mode {
       ReadMode::Async => false,
@@ -91,22 +95,24 @@ pub enum Format {
   Date,
   DateTime,
   Truthy,
+  #[allow(dead_code)]
   TruthyCustom(Arc<str>, Arc<str>)
 }
 
 impl ToString for Format {
   fn to_string(&self) -> String {
-      match self {
-        Self::Auto => "auto",
-        Self::Text => "text",
-        Self::Integer => "integer",
-        Self::Decimal(n) => "decimal($n)",
-        Self::Boolean => "boolean",
-        Self::Date => "date",
-        Self::DateTime => "datetime",
-        Self::Truthy => "truthy",
-        Self::TruthyCustom(yes, no) => "truthy_custom($yes,$no)",
-      }.to_string()
+    let result = match self {
+      Self::Auto => "auto",
+      Self::Text => "text",
+      Self::Integer => "integer",
+      Self::Decimal(n) => &format!("decimal({})", n),
+      Self::Boolean => "boolean",
+      Self::Date => "date",
+      Self::DateTime => "datetime",
+      Self::Truthy => "truthy",
+      Self::TruthyCustom(yes, no) => &format!("truthy({},{})", yes, no),
+    };
+    result.to_string() 
   }
 }
 
@@ -125,14 +131,19 @@ impl FromStr for Format {
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
-        "t" | "truthy" => Self::Truthy,
+        "tr" | "truthy" => Self::Truthy,
         _ => Self::Auto,
       };
       Ok(fmt)
   }
 }
 
-
+impl Format {
+  #[allow(dead_code)]
+  pub fn truthy_custom(yes: &str, no: &str) -> Self {
+    Format::TruthyCustom(Arc::from(yes), Arc::from(no))
+  }
+}
 
 #[derive(Debug, Clone)]
 pub struct Column {
@@ -145,11 +156,13 @@ pub struct Column {
 
 impl Column {
 
-
+  /// build from core options and sheet index only
   pub fn from_key_index(key_opt: Option<&str>, index: usize) -> Self {
     Self::from_key_ref_with_format(key_opt, index, Format::Auto, None, false, false)
   }
 
+  // future development with column options
+  #[allow(dead_code)]
   pub fn from_key_custom(key_opt: Option<&str>, index: usize, date_only: bool, euro_number_format: bool) -> Self {
     Self::from_key_ref_with_format(key_opt, index, Format::Auto, None, date_only, euro_number_format)
   }
@@ -178,7 +191,8 @@ impl Column {
 }
 
 
-
+/// Match on permitted file types identified by file extensions
+/// Unmatched means do not process
 #[derive(Debug, Clone, Copy)]
 pub enum Extension {
   Unmatched,
@@ -207,14 +221,18 @@ impl Extension {
     Extension::Unmatched
   }
 
-  fn use_calamine(&self) -> bool {
+  /// use the Calamine library
+  pub fn use_calamine(&self) -> bool {
     match self {
       Self::Ods | Self::Xlsx | Self::Xls => true,
       _ => false
     }
   }
-
-  fn use_csv(&self) -> bool {
+  
+  /// added for future development
+  /// Process a simple CSV or TSV
+  #[allow(dead_code)]
+  pub fn use_csv(&self) -> bool {
     match self {
       Self::Csv | Self::Tsv => true,
       _ => false
@@ -296,4 +314,18 @@ fn default_max_rows() -> usize {
   .ok()
   .and_then(|s| s.parse::<usize>().ok())
   .unwrap_or(10000)
+}
+
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_format_mode() {
+    let custom_boolean = Format::truthy_custom("si", "no");
+    assert_eq!(custom_boolean.to_string(), "truthy(si,no)");
+  }
+
 }
