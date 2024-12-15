@@ -1,15 +1,18 @@
-use clap::Error;
-use serde_json::{json, Value};
+use serde_json::{json, Error, Value};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
-
-
 
 #[derive(Debug, Clone)]
 pub struct RowOptionSet {
   pub euro_number_format: bool, // always parse as euro number format
   pub date_only: bool,
   pub columns: Vec<Column>,
+}
+
+impl RowOptionSet {
+  pub fn column(&self, index: usize) -> Option<&Column> {
+    self.columns.get(index)
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -23,12 +26,6 @@ pub struct OptionSet {
   pub omit_header: bool,
   pub header_row: u8,
   pub read_mode: ReadMode,
-}
-
-impl RowOptionSet {
-  pub fn column(&self, index: usize) -> Option<&Column> {
-    self.columns.get(index)
-  }
 }
 
 impl OptionSet {
