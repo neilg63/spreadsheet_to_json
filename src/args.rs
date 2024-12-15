@@ -46,6 +46,9 @@ pub struct Args {
   #[clap(short = 'p',long, value_parser, default_value_t = false) ]
   pub preview: bool, // test validity only and show options
 
+  #[clap(long, value_parser, default_value_t = false) ]
+  pub debug: bool, // debug mode
+
 }
 
 pub trait FromArgs {
@@ -82,7 +85,6 @@ impl FromArgs for OptionSet {
                 }
                 columns.push(Column::from_key_ref_with_format(Some(&ck.to_snake_case()), index, fmt, default_val, false, false));
             }
-            
             index += 1;
         }
     }

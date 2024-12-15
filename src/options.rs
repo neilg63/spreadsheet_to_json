@@ -1,8 +1,7 @@
 use clap::Error;
 use serde_json::{json, Value};
-use tokio::io::AsyncWriteExt;
 use crate::headers::*;
-use std::{fs::File, path::Path, str::FromStr, sync::Arc};
+use std::{path::Path, str::FromStr, sync::Arc};
 
 
 
@@ -76,7 +75,7 @@ impl OptionSet {
   pub fn capture_rows(&self) -> bool {
     match self.read_mode {
       ReadMode::Async => false,
-      _ => false
+      _ => true
     }
   }
 }
@@ -90,7 +89,9 @@ pub enum Format {
   Decimal(u8),
   Boolean,
   Date,
-  DateTime
+  DateTime,
+  Truthy,
+  TruthyCustom(Arc<str>, Arc<str>)
 }
 
 impl ToString for Format {
@@ -102,7 +103,9 @@ impl ToString for Format {
         Self::Decimal(n) => "decimal($n)",
         Self::Boolean => "boolean",
         Self::Date => "date",
-        Self::DateTime => "datetime"
+        Self::DateTime => "datetime",
+        Self::Truthy => "truthy",
+        Self::TruthyCustom(yes, no) => "truthy_custom($yes,$no)",
       }.to_string()
   }
 }
@@ -122,6 +125,7 @@ impl FromStr for Format {
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
+        "t" | "truthy" => Self::Truthy,
         _ => Self::Auto,
       };
       Ok(fmt)
