@@ -14,7 +14,7 @@ use calamine::{open_workbook_auto, Data, Error,Reader};
 
 use crate::headers::*;
 use crate::data_set::*;
-use crate::is_truthy::is_truthy_core;
+use crate::is_truthy::*;
 use crate::Extension;
 use crate::Format;
 use crate::OptionSet;
@@ -436,7 +436,16 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
     } else if let Some(is_true) = is_truthy_core(cell, false) {
         new_cell = Value::Bool(is_true);
     } else {
-        new_cell = Value::String(cell.to_string());
+        new_cell = match fmt {
+          Format::Truthy => {
+            if let Some(is_true) = is_truthy_standard(cell, false) {
+              Value::Bool(is_true)
+            } else {
+              Value::Null
+            }
+          }
+          _ => Value::String(cell.to_string())
+        };
     }
     new_cell
 }
