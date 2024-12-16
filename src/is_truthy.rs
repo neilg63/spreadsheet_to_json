@@ -41,7 +41,8 @@ pub fn is_truthy_standard(txt: &str, empty_is_false: bool) -> Option<bool> {
   }
 }
 
-
+/// Validate a string cell from an array of truthy options with patterns that may be true or false
+/// if unmatched return None, otherwise Some(true) or Some(false)
 #[allow(dead_code)]
 pub fn is_truthy_custom(txt: &str, opts: &[TruthyOption], use_defaults: bool, empty_is_false: bool) -> Option<bool> {
   // Will return the first matched letter sequence
@@ -77,6 +78,9 @@ pub fn is_truthy_custom(txt: &str, opts: &[TruthyOption], use_defaults: bool, em
   }
 }
 
+/// Truth Option that may be case-sensitive and match either the start or anywhere within a string
+/// It's assumed truthy field use consistent naming conventions, but this allows some flexibility
+/// without using full regular expressions
 #[derive(Debug)]
 pub struct TruthyOption {
   pub is_true: bool,
@@ -100,7 +104,9 @@ impl TruthyOption {
   }
 }
 
-
+/// convert a custom string setting into a full TruthyOptiuon
+/// e.g. truthy|ok,good|failed,bad will be translated into two true options (ok or good) and two false options (failed and bad)
+/// case_sensitive and starts_with are applied globally
 #[allow(dead_code)]
 pub fn split_truthy_custom_option_str(custom_str: &str, case_sensitive: bool, starts_with: bool) -> Vec<TruthyOption> {
   let parts = custom_str.to_segments(",");
