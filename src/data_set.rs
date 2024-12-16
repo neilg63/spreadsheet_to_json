@@ -55,6 +55,8 @@ impl WorkbookInfo {
     }
 }
 
+
+// Result set
 #[derive(Debug, Clone)]
 pub struct ResultSet {
     pub filename: String,
@@ -68,50 +70,64 @@ pub struct ResultSet {
 }
 
 impl ResultSet {
-    pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet, out_ref: Option<&str>) -> Self {
-        let (num_rows, data) = match data_set {
-            DataSet::WithRows(size, rows) => (size, rows),
-            DataSet::Count(size) => (size, vec![])
-        };
-        ResultSet {
-            extension: info.ext(),
-            filename: info.name(), 
-            sheet: info.sheet(),
-            sheets: info.sheets(),
-            keys: keys.to_vec(),
-            num_rows,
-            data,
-            out_ref: out_ref.map(|s| s.to_string())
-        }
-    }
 
-    pub fn to_json(&self) -> Value {
-        let mut result = json!({
-            "name": self.filename,
-            "extension": self.extension,
-            "sheet": {
-                "key": self.sheet.0,
-                "index": self.sheet.1
-            },
-            "sheets": self.sheets,
-            "num_rows": self.num_rows,
-            "fields": self.keys,
-            "data": self.data,
-        });
-        if let Some(out_ref_str) = self.out_ref.clone() {
-            result["outref"] = json!(out_ref_str);
-        }
-        result
+  /// Instantiate with Core workbook info, header keys, data set and optional output reference
+  pub fn new(info: WorkbookInfo, keys: &[String], data_set: DataSet, out_ref: Option<&str>) -> Self {
+    let (num_rows, data) = match data_set {
+      DataSet::WithRows(size, rows) => (size, rows),
+      DataSet::Count(size) => (size, vec![])
+    };
+    ResultSet {
+      extension: info.ext(),
+      filename: info.name(), 
+      sheet: info.sheet(),
+      sheets: info.sheets(),
+      keys: keys.to_vec(),
+      num_rows,
+      data,
+      out_ref: out_ref.map(|s| s.to_string())
     }
+  }
 
-    /// final output as vector of JSON-serializable array
-    pub fn rows(&self) -> Vec<String> {
-      let mut lines = Vec::with_capacity(self.data.len());
-      for row in &self.data {
-        lines.push(json!(row).to_string());
-      }
-      lines
+  /// Full result set as JSON with criteria, options and data in synchronous mode
+  pub fn to_json(&self) -> Value {
+    let mut result = json!({
+      "name": self.filename,
+      "extension": self.extension,
+      "sheet": {
+          "key": self.sheet.0,
+          "index": self.sheet.1
+      },
+      "sheets": self.sheets,
+      "num_rows": self.num_rows,
+      "fields": self.keys,
+      "data": self.data,
+    });
+    if let Some(out_ref_str) = self.out_ref.clone() {
+      result["outref"] = json!(out_ref_str);
     }
+    result
+  }
+
+  /// Extract the vector of rows as Index Maps of JSON values
+  /// Good for post-processing results
+  pub fn to_vec(&self) -> Vec<IndexMap<String, Value>> {
+    self.data.clone()
+  }
+  
+  /// JSON object of row arrays only
+  pub fn json_rows(&self) -> Value {
+    json!(self.data)
+  }
+
+  /// final output as vector of JSON-serializable array
+  pub fn rows(&self) -> Vec<String> {
+    let mut lines = Vec::with_capacity(self.data.len());
+    for row in &self.data {
+      lines.push(json!(row).to_string());
+    }
+    lines
+  }
 
 }
 

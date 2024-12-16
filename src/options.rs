@@ -3,7 +3,7 @@ use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
 
 /// Row parsing options with nested column options
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RowOptionSet {
   pub euro_number_format: bool, // always parse as euro number format
   pub date_only: bool,
@@ -17,7 +17,7 @@ impl RowOptionSet {
 }
 
 /// Core options with nested row options
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct OptionSet {
   pub sheet: Option<String>, // Optional sheet name reference. Will default to index value if not matched
   pub index: u32, // worksheet index
@@ -31,7 +31,64 @@ pub struct OptionSet {
 }
 
 impl OptionSet {
-  pub fn to_json(&self) -> Value {
+  /// Instantiates a new option set with a path string for file operations.
+  pub fn new(path_str: &str) -> Self {
+    OptionSet {
+      sheet: None,
+      index: 0,
+      path: Some(path_str.to_string()),
+      rows: RowOptionSet::default(),
+      jsonl: false,
+      max: None,
+      omit_header: false,
+      header_row: 0,
+      read_mode: ReadMode::Sync,
+    }
+}
+
+
+  /// Sets the sheet name for the operation.
+  pub fn sheet_name(&mut self, name: String) -> &mut Self {
+      self.sheet = Some(name);
+      self
+  }
+
+  /// Sets the sheet index.
+  pub fn sheet_index(&mut self, index: u32) -> &mut Self {
+      self.index = index;
+      self
+  }
+  /// Sets JSON Lines mode to true.
+  pub fn json_lines(&mut self) -> &mut Self {
+      self.jsonl = true;
+      self
+  }
+
+  /// Omits the header when reading.
+  pub fn omit_header(&mut self) -> &mut Self {
+      self.omit_header = true;
+      self
+  }
+
+  /// Sets the header row number.
+  pub fn header_row(&mut self, row: u8) -> &mut Self {
+      self.header_row = row;
+      self
+  }
+
+  /// Sets the maximum number of rows to read.
+  pub fn max_row_count(&mut self, max: u32) -> &mut Self {
+      self.max = Some(max);
+      self
+  }
+
+  /// Sets the read mode to asynchronous.
+  pub fn read_mode_async(&mut self) -> &mut Self {
+      self.read_mode = ReadMode::Async;
+      self
+  }
+
+   pub fn to_json(&self) -> Value {
     json!({
       "sheet": {
         "key": self.sheet.clone().unwrap_or("".to_string()),
@@ -308,8 +365,9 @@ impl<'a> PathData<'a> {
 
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ReadMode {
+  #[default]
   Sync,
   PreviewAsync,
   Async

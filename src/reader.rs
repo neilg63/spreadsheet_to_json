@@ -40,7 +40,7 @@ pub async fn render_spreadsheet_core(
       let path = Path::new(&filepath);
       if !path.exists() {
           #[allow(dead_code)]
-          return Err(From::from("The file is not available"));
+          return Err(From::from("file_unavailable"));
       }
       let path_data = PathData::new(path);
       if path_data.is_valid() {
