@@ -35,16 +35,58 @@ async fn main() -> Result((), Error) {
   let opts = Opts::new("path/to/spreadsheet.xslx")->read_mode_async();
   let dataset_id = db_dataset_id(&opts);
 
-  fn save_data_row(row: IndexMap<String, Value>) -> Result((), Error) {
-    
-  }
+  let callback = move |row: IndexMap<String, Value>| -> Result<(), Error> {
+    save_data_row(row, &connection, dataset_id)
+  };
 
-  let result = render_spreadsheet_core(&opts, Some(save_data_row), Some(dataset_id)).await;
+  let result = render_spreadsheet_core(&opts, Some(callback), Some(dataset_id)).await;
   let result_set = match result {
       Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
       Ok(data_set) => data_set.to_json() // full result set
   };
   println!("{}", result_set);
+}
+
+
+fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id: u32) -> Result((), Error) {
+    let mut row_struct = CustomTableStruct {
+    id: None,
+    data_id: data_id, // or whatever ID setting logic you have
+    field1: None,
+    field2: None,
+    field3: None,
+    // ... set other fields to None or default values
+  };
+  
+  for (key, value) in row {
+    match key.as_str() {
+        "field1" => {
+            if let Value::String(s) = value {
+                row_struct.field1 = Some(s.clone());
+            }
+        },
+        "field2" => {
+            if let Value::Number(n) = value {
+                if let Some(i) = n.as_i64() {
+                    row_struct.field2 = Some(i as i32);
+                }
+            }
+        },
+        "field3" => {
+            if let Value::Number(n) = value {
+                if let Some(f) = n.as_f64() {
+                    row_struct.field3 = Some(f);
+                }
+            }
+        },
+        // Add other field mappings here
+        _ => {} // Ignore unknown keys
+    }
+  }
+  diesel::insert_into("data_rows")
+  .values(&row_struct)
+  .execute(connection)?;
+  Ok()
 }
 ```
 

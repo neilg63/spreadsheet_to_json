@@ -1,8 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use csv::ReaderBuilder;
-use csv::StringRecord;
+use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
 use tokio::sync::mpsc;
 use serde_json::{Number, Value};
@@ -69,7 +68,6 @@ pub async fn read_workbook_core<'a>(
     let max_rows = opts.max_rows();
     let (sheet_name_opt, sheet_names, sheet_index) = match_sheet_name_and_index(&mut workbook, opts);
     let capture_rows = opts.capture_rows();
-    println!("cr: {}", capture_rows);
     if let Some(first_sheet_name) = sheet_name_opt {
       let range = workbook.worksheet_range(&first_sheet_name.clone())?;
       let mut headers: Vec<String> = vec![];
@@ -145,10 +143,12 @@ pub async fn read_workbook_core<'a>(
 }
   
 
+// convert an array of row data to an IndexMap of serde_json::Value objects
 fn workbook_row_to_map(row: &[Data], opts: &RowOptionSet,  headers: &[String]) ->  IndexMap<String, Value> {
   to_index_map(&workbook_row_to_values(row, &opts), headers)
 }
 
+// convert an array of row data to an vector of serde_json::Value objects
 fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
   let mut c_index = 0;
   let mut cells: Vec<Value> = vec![];
@@ -160,6 +160,7 @@ fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
   cells
 }
 
+// convert a spreadsheet data cell to a polymorphic serde_json::Value object
 fn workbook_cell_to_value(cell:&Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
   let col = opts.column(c_index);
   let format = if let Some(c) = col {
@@ -278,6 +279,7 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_
   }
 }
 
+// Convert csv rows to value
 fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: Arc<&RowOptionSet>) -> Option<Vec<Value>> {
   if let Ok(record) = result {
     let mut row: Vec<Value> = vec![];
@@ -292,6 +294,7 @@ fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: Arc<
   None
 }
 
+// convert CSV cell &str value to a polymorphic serde_json::VALUE
 fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) -> Value {
     let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric

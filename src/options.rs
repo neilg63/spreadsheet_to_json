@@ -1,6 +1,8 @@
 use serde_json::{json, Error, Value};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
+/// default max number of rows without an override via ->max_row_count(max_row_count)
+pub const DEFAULT_MAX_ROWS: usize = 10_000;
 
 /// Row parsing options with nested column options
 #[derive(Debug, Clone, Default)]
@@ -119,7 +121,7 @@ impl OptionSet {
     if let Some(mr) = self.max {
       mr as usize
     } else {
-      default_max_rows()
+      DEFAULT_MAX_ROWS
     }
   }
 
@@ -132,6 +134,11 @@ impl OptionSet {
   /// cloned read mode
   pub fn read_mode(&self) -> ReadMode {
     self.read_mode.clone()
+  }
+
+  /// Needs full data set to processed later
+  pub fn is_async(&self) -> bool {
+    self.read_mode.is_async()
   }
 
   // Should rows be captured synchronously
@@ -360,7 +367,7 @@ impl<'a> PathData<'a> {
     } else {
         "".to_owned()
     }
-}
+  }
 }
 
 
@@ -373,15 +380,23 @@ pub enum ReadMode {
   Async
 }
 
+/// either Preview or Async mode
+impl ReadMode {
+  pub fn is_async(&self) -> bool {
+    match self {
+      Self::Sync => false,
+      _ => true
+    }
+  }
 
-fn default_max_rows() -> usize {
-  dotenv::var("DEFAULT_MAX_ROWS")
-  .ok()
-  .and_then(|s| s.parse::<usize>().ok())
-  .unwrap_or(10000)
+  /// not preview or sync mode
+  pub fn is_full_async(&self) -> bool {
+    match self {
+      Self::Async => true,
+      _ => false
+    }
+  }
 }
-
-
 
 #[cfg(test)]
 mod tests {
