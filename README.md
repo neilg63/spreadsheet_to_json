@@ -1,9 +1,8 @@
-[![mirror](https://img.shields.io/badge/mirror-github-blue)](https://github.com/neilg63/to-offset)
-[![crates.io](https://img.shields.io/crates/v/to-offset.svg)](https://crates.io/crates/to-offset)
-[![docs.rs](https://docs.rs/to-offset/badge.svg)](https://docs.rs/to-offset)
+[![mirror](https://img.shields.io/badge/mirror-github-blue)](https://github.com/neilg63/spreadsheet-to-json)
+[![crates.io](https://img.shields.io/crates/v/spreadsheet-to-json.svg)](https://crates.io/crates/spreadsheet-to-json)
+[![docs.rs](https://docs.rs/spreadsheet-to-json/badge.svg)](https://docs.rs/spreadsheet-to-json)
 
 # spreadsheet-to-json: Convert Spreadsheets and CSV files to jSON
-
 
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
@@ -24,6 +23,7 @@ It supports the following formats:
 * Formula cells are read as calculated values
 * Can identify and convert Excel's custom datetime cells and differentiate them from the ISO format used in OpenDocument Spreadsheet
 - Can identify numeric fields formatted as texts and convert them to integers or floats.
+- Can identify truth cells and convert them to booleans
 - Can save large files asynchronously
 
 ## To do
