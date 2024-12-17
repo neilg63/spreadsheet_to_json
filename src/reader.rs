@@ -9,7 +9,7 @@ use simple_string_patterns::*;
 use indexmap::IndexMap;
 use std::path::Path;
 
-use calamine::{open_workbook_auto, Data, Error,Reader};
+use calamine::{open_workbook_auto, Data, Reader};
 
 use crate::headers::*;
 use crate::data_set::*;

@@ -21,7 +21,7 @@ It supports the following formats:
 - Blazingly fast
 - Can export to standard JSON or to JSON lines when writing large files
 * Formula cells are read as calculated values
-* Can identify and convert Excel's custom datetime cells and differentiate them from the ISO format used in OpenDocument Spreadsheet
+* Can identify and convert both Excel's 1900 datetime format and standard ISO format as used in OpenDocument Spreadsheet
 - Can identify numeric fields formatted as text and convert them to integers or floats.
 - Can identify truthy text or number cells and convert them to booleans
 - Can save large files asynchronously
@@ -34,6 +34,8 @@ This crate is still alpha and likely to undergo breaking changes as it's part of
 - **0.1.2** All public error types now use the GenericError error type
 
 ## Examples
+
+The main implementation is my unpublished [Spreadsheet to JSON CLI](https://github.com/neilg63/spreadsheet_to_json_cli) crate,
 
 ### Simple immediate parsing. This must be called in an async function.
 ```rust
