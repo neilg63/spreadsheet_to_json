@@ -2,7 +2,7 @@
 name = "spreadsheet-to-json"
 description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as well as CSV and TSV files to JSON or JSONL"
 repository = "https://github.com/neilg63/spreadsheet_to_json"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 categories = ["data-structures", "parsing", "text-processing"]
 license = "GPL-2.0-or-later WITH Bison-exception-2.2"
