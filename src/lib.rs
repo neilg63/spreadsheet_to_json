@@ -5,6 +5,7 @@ pub mod reader;
 pub mod euro_number_format;
 pub mod is_truthy;
 pub mod error;
+mod db; // for testing only
 
 // make tokio available to implementers if not imported directly
 pub use options::*;
@@ -22,4 +23,5 @@ pub use simple_string_patterns;
 pub use indexmap;
 // reexported to facilitate post processing and error handling without adding it separately
 pub use calamine;
+
 

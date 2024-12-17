@@ -363,4 +363,3 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
     new_cell
 }
 
-
