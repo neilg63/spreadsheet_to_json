@@ -10,7 +10,7 @@ It relies on the [Calamine](https://crates.io/crates/calamine) and [CSV](https:/
 
 It supports the following formats:
 
-- Excel 2007 (*.xslx*)
+- Excel 2007 (*.xlsx*)
 - Excel 97-2004 (*.xls*)
 - OpenDocument Spreadsheets (*.ods*) compatible with LibreOffice
 - CSV: comma separated files
@@ -58,8 +58,9 @@ use spreadsheet_to_json::*;
 use spreadsheet_to_json::tokio;
 use spreadsheet_to_json::calamine::Error;
 
+#[tokio:main]
 async fn main() -> Result((), Error) {
-  let opts = Opts::new("path/to/spreadsheet.xslx")->read_mode_async();
+  let opts = Opts::new("path/to/spreadsheet.xlsx")->read_mode_async();
   let dataset_id = db_dataset_id(&opts);
 
   let callback = move |row: IndexMap<String, Value>| -> Result<(), Error> {
@@ -74,7 +75,7 @@ async fn main() -> Result((), Error) {
   println!("{}", result_set);
 }
 
-
+// Synchronous save function called in a closure for each row with a database connection and data_id from the outer scope
 fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id: u32) -> Result((), Error) {
     let mut row_struct = CustomTableStruct {
     id: None,
