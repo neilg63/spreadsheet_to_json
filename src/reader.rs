@@ -20,26 +20,27 @@ use crate::OptionSet;
 use crate::euro_number_format::is_euro_number_format;
 use crate::PathData;
 use crate::RowOptionSet;
+use crate::error::GenericError;
 
 
 /// Output the result set with captured rows (up to the maximum allowed) directly.
 /// This is still asynchronous as it's a wrapper for a function accepting multithreaded async callbacks
 pub async fn render_spreadsheet_direct(
-  opts: &OptionSet) -> Result<ResultSet, Error> {  
+  opts: &OptionSet) -> Result<ResultSet, GenericError> {  
   render_spreadsheet_core(opts, None, None).await
 }
 
 pub async fn render_spreadsheet_core(
     opts: &OptionSet,
-    save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>,
+    save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
     out_ref: Option<&str>
-  ) -> Result<ResultSet, Error> {
+  ) -> Result<ResultSet, GenericError> {
     
   if let Some(filepath) = opts.path.clone() {
       let path = Path::new(&filepath);
       if !path.exists() {
           #[allow(dead_code)]
-          return Err(From::from("file_unavailable"));
+          return Err(GenericError("file_unavailable"));
       }
       let path_data = PathData::new(path);
       if path_data.is_valid() {
@@ -49,21 +50,21 @@ pub async fn render_spreadsheet_core(
           read_csv_core(&path_data, opts, save_opt, out_ref).await
         }
       } else {
-        Err(From::from("unsupported_format"))
+        Err(GenericError("unsupported_format"))
       }
   } else {
-      Err(From::from("no_filepath_specified"))
+    Err(GenericError("no_filepath_specified"))
   }
 }
 
 
 /// Parse spreadsheets with an optional callback method to save rows asynchronously and an optional output reference
 /// that may be a file name or database identifier
-pub async fn read_workbook_core<'a>(
+pub async fn read_workbook_core<'a> (
     path_data: &PathData<'a>, opts: &OptionSet,
-    save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>,
+    save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
     out_ref: Option<&str>
-  )  -> Result<ResultSet, Error> {
+  )  -> Result<ResultSet, GenericError> {
   if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
     let columns = opts.rows.columns.clone();
     let max_rows = opts.max_rows();
@@ -136,10 +137,10 @@ pub async fn read_workbook_core<'a>(
       let ds = DataSet::from_count_and_rows(total, rows, opts);
       Ok(ResultSet::new(info, &headers, ds, out_ref))
     } else {
-      Err(From::from("workbook_with_no_sheets"))
+      Err(GenericError("workbook_with_no_sheets"))
     }
   } else {
-    Err(From::from("cannot_open_workbook"))
+    Err(GenericError("cannot_open_workbook"))
   }
 }
 
@@ -147,8 +148,12 @@ pub async fn read_workbook_core<'a>(
 
 /// Process a CSV/TSV file asynchronously with an optional row save method 
 /// amd output reference (file or database table reference)
-pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>, out_ref: Option<&str>)  -> Result<ResultSet, Error> 
-  {
+pub async fn read_csv_core<'a>(
+    path_data: &PathData<'a>,
+    opts: &OptionSet,
+    save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
+    out_ref: Option<&str>
+  )  -> Result<ResultSet, GenericError> {
   let separator = match path_data.mode() {
     Extension::Tsv => b't',
     _ => b',',
@@ -220,7 +225,7 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_
       Extension::Tsv => "unreadable_tsv_file",
       _ => "unreadable_csv_file"
     };
-    Err(From::from(error_msg))
+    Err(GenericError(error_msg))
   }
 }
 
@@ -357,4 +362,5 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
     }
     new_cell
 }
+
 

@@ -31,6 +31,7 @@ Full explanation of options to come.
 
 ## Alpha warning
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
+- **0.1.2** All public error types now use the GenericError error type
 
 ## Examples
 
@@ -56,10 +57,9 @@ async fn main() -> Result((), Error) {
 ```rust
 use spreadsheet_to_json::*;
 use spreadsheet_to_json::tokio;
-use spreadsheet_to_json::calamine::Error;
 
 #[tokio:main]
-async fn main() -> Result((), Error) {
+async fn main() -> Result((), GenericError) {
   let opts = Opts::new("path/to/spreadsheet.xlsx")->read_mode_async();
   let dataset_id = db_dataset_id(&opts);
 
@@ -75,14 +75,13 @@ async fn main() -> Result((), Error) {
   println!("{}", result_set);
 }
 
-// Synchronous save function called in a closure for each row with a database connection and data_id from the outer scope
-fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id: u32) -> Result((), Error) {
+// Save function called in a closure for each row with a database connection and data_id from the outer scope
+fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id: u32) -> Result((), GenericError) {
     let mut row_struct = CustomTableStruct {
     id: None,
     data_id: data_id, // or whatever ID setting logic you have
     field1: None,
     field2: None,
-    field3: None,
     // ... set other fields to None or default values
   };
   
@@ -100,20 +99,13 @@ fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id
                 }
             }
         },
-        "field3" => {
-            if let Value::Number(n) = value {
-                if let Some(f) = n.as_f64() {
-                    row_struct.field3 = Some(f);
-                }
-            }
-        },
         // Add other field mappings here
         _ => {} // Ignore unknown keys
     }
   }
   diesel::insert_into("data_rows")
   .values(&row_struct)
-  .execute(connection)?;
+  .execute(connection),map_error(|_| GenericError("database_error"));
   Ok()
 }
 ```
