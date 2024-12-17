@@ -22,8 +22,8 @@ It supports the following formats:
 - Can export to standard JSON or to JSON lines when writing large files
 * Formula cells are read as calculated values
 * Can identify and convert Excel's custom datetime cells and differentiate them from the ISO format used in OpenDocument Spreadsheet
-- Can identify numeric fields formatted as texts and convert them to integers or floats.
-- Can identify truth cells and convert them to booleans
+- Can identify numeric fields formatted as text and convert them to integers or floats.
+- Can identify truthy text or number cells and convert them to booleans
 - Can save large files asynchronously
 
 ## To do
