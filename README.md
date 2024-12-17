@@ -1,9 +1,36 @@
+[![mirror](https://img.shields.io/badge/mirror-github-blue)](https://github.com/neilg63/to-offset)
+[![crates.io](https://img.shields.io/crates/v/to-offset.svg)](https://crates.io/crates/to-offset)
+[![docs.rs](https://docs.rs/to-offset/badge.svg)](https://docs.rs/to-offset)
+
 # spreadsheet-to-json: Convert Spreadsheets and CSV files to jSON
 
 
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
 It relies on the [Calamine](https://crates.io/crates/calamine) and [CSV](https://crates.io/crates/csv) library crates to process files, the [tokio](https://crates.io/crates/tokio) crate for asynchronous operations and naturally [serde](https://crates.io/crates/serde) and [serde_json](https://crates.io/crates/serde_json) serialization libraries.
+
+It supports the following formats:
+
+- Excel 2007 (*.xslx*)
+- Excel 97-2004 (*.xls*)
+- OpenDocument Spreadsheets (*.ods*) compatible with LibreOffice
+- CSV: comma separated files
+- TSV: Tab-separated files 
+
+## Features
+
+- Blazingly fast
+- Can export to standard JSON or to JSON lines when writing large files
+* Formula cells are read as calculated values
+* Can identify and convert Excel's custom datetime cells and differentiate them from the ISO format used in OpenDocument Spreadsheet
+- Can identify numeric fields formatted as texts and convert them to integers or floats.
+- Can save large files asynchronously
+
+## To do
+Full explanation of options to come.
+
+## Alpha warning
+This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
 
 ## Examples
 
