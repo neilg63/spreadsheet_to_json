@@ -22,8 +22,8 @@ use crate::PathData;
 use crate::RowOptionSet;
 
 
-/// Output the result set with captured rows (up to the maximum allowed) directly
-/// this is still asynchronous as it's a wrapper for a function accepting multithreaded async callbacks
+/// Output the result set with captured rows (up to the maximum allowed) directly.
+/// This is still asynchronous as it's a wrapper for a function accepting multithreaded async callbacks
 pub async fn render_spreadsheet_direct(
   opts: &OptionSet) -> Result<ResultSet, Error> {  
   render_spreadsheet_core(opts, None, None).await
@@ -57,7 +57,8 @@ pub async fn render_spreadsheet_core(
 }
 
 
-/// Supports asynchronous handling of large spreadsheets
+/// Parse spreadsheets with an optional callback method to save rows asynchronously and an optional output reference
+/// that may be a file name or database identifier
 pub async fn read_workbook_core<'a>(
     path_data: &PathData<'a>, opts: &OptionSet,
     save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>,
@@ -141,67 +142,11 @@ pub async fn read_workbook_core<'a>(
     Err(From::from("cannot_open_workbook"))
   }
 }
-  
 
-// convert an array of row data to an IndexMap of serde_json::Value objects
-fn workbook_row_to_map(row: &[Data], opts: &RowOptionSet,  headers: &[String]) ->  IndexMap<String, Value> {
-  to_index_map(&workbook_row_to_values(row, &opts), headers)
-}
 
-// convert an array of row data to an vector of serde_json::Value objects
-fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
-  let mut c_index = 0;
-  let mut cells: Vec<Value> = vec![];
-  for cell in row {
-    let value = workbook_cell_to_value(cell, Arc::new(opts), c_index);
-    cells.push(value);
-    c_index += 1;
-  }
-  cells
-}
 
-// convert a spreadsheet data cell to a polymorphic serde_json::Value object
-fn workbook_cell_to_value(cell:&Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
-  let col = opts.column(c_index);
-  let format = if let Some(c) = col {
-    c.format.to_owned()
-  } else {
-    Format::Auto
-  };
-  match cell {
-    Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
-    Data::Float(f) => {
-      match format {
-        Format::Integer => Value::Number(Number::from_i128(*f as i128).unwrap()),
-        _ => Value::Number(Number::from_f64(*f).unwrap())
-      }
-    },
-    Data::DateTimeIso(d) => Value::String(d.to_owned()),
-    Data::DateTime(d) => {
-        let ndt = d.as_datetime();
-        let dt_ref = if let Some(dt) = ndt {
-            let fmt_str = match format {
-              Format::Date => "%Y-%m-%d",
-              _ => if opts.date_only {
-                "%Y-%m-%d"
-              } else {
-                "%Y-%m-%dT%H:%M:%S.000Z"
-              }
-            };
-            dt.format(fmt_str).to_string()
-        } else {
-            "".to_string()
-        };
-        Value::String(dt_ref)
-    },
-    Data::Bool(b) => Value::Bool(*b),
-    // For other types, convert to string since JSON can't directly represent them as unquoted values
-    Data::Empty => Value::Null,
-    _ => Value::String(cell.to_string())
-  }
-}
-
-/// process CSV file asynchronously with optional row save method amd output reference (file or database table reference)
+/// Process a CSV/TSV file asynchronously with an optional row save method 
+/// amd output reference (file or database table reference)
 pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_opt:  Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), Error> + Send + Sync>>, out_ref: Option<&str>)  -> Result<ResultSet, Error> 
   {
   let separator = match path_data.mode() {
@@ -279,6 +224,65 @@ pub async fn read_csv_core<'a>(path_data: &PathData<'a>, opts: &OptionSet, save_
   }
 }
 
+// Convert an array of row data to an IndexMap of serde_json::Value objects
+fn workbook_row_to_map(row: &[Data], opts: &RowOptionSet,  headers: &[String]) ->  IndexMap<String, Value> {
+  to_index_map(&workbook_row_to_values(row, &opts), headers)
+}
+
+// Convert an array of row data to an vector of serde_json::Value objects
+fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
+  let mut c_index = 0;
+  let mut cells: Vec<Value> = vec![];
+  for cell in row {
+    let value = workbook_cell_to_value(cell, Arc::new(opts), c_index);
+    cells.push(value);
+    c_index += 1;
+  }
+  cells
+}
+
+// convert a spreadsheet data cell to a polymorphic serde_json::Value object
+fn workbook_cell_to_value(cell:&Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
+  let col = opts.column(c_index);
+  let format = if let Some(c) = col {
+    c.format.to_owned()
+  } else {
+    Format::Auto
+  };
+  match cell {
+    Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
+    Data::Float(f) => {
+      match format {
+        Format::Integer => Value::Number(Number::from_i128(*f as i128).unwrap()),
+        _ => Value::Number(Number::from_f64(*f).unwrap())
+      }
+    },
+    Data::DateTimeIso(d) => Value::String(d.to_owned()),
+    Data::DateTime(d) => {
+        let ndt = d.as_datetime();
+        let dt_ref = if let Some(dt) = ndt {
+            let fmt_str = match format {
+              Format::Date => "%Y-%m-%d",
+              _ => if opts.date_only {
+                "%Y-%m-%d"
+              } else {
+                "%Y-%m-%dT%H:%M:%S.000Z"
+              }
+            };
+            dt.format(fmt_str).to_string()
+        } else {
+            "".to_string()
+        };
+        Value::String(dt_ref)
+    },
+    Data::Bool(b) => Value::Bool(*b),
+    // For other types, convert to string since JSON can't directly represent them as unquoted values
+    Data::Empty => Value::Null,
+    _ => Value::String(cell.to_string())
+  }
+}
+
+
 // Convert csv rows to value
 fn csv_row_result_to_values(result: Result<StringRecord, csv::Error>, opts: Arc<&RowOptionSet>) -> Option<Vec<Value>> {
   if let Ok(record) = result {
@@ -353,7 +357,4 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
     }
     new_cell
 }
-
-
-
 
