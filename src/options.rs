@@ -111,21 +111,7 @@ impl OptionSet {
 
   /// Sets the column key naming convetion
   pub fn field_name_mode(&mut self, system: &str, override_header: bool) -> &mut Self {
-    self.field_mode = if system.starts_with_ci("a1") {
-      if override_header {
-        FieldNameMode::A1
-      } else {
-        FieldNameMode::AutoA1
-      }
-    } else if system.starts_with_ci("c") || system.starts_with_ci("n") {
-      if override_header {
-        FieldNameMode::NumPadded
-      } else {
-        FieldNameMode::AutoNumPadded
-      }
-    } else {
-      FieldNameMode::A1
-    };
+    self.field_mode = FieldNameMode::from_key(system, override_header);
     self
 }
 
@@ -518,6 +504,26 @@ pub enum FieldNameMode {
 
 /// either Preview or Async mode
 impl FieldNameMode {
+
+
+  pub fn from_key(system: &str, override_header: bool) -> Self {
+    if system.starts_with_ci("a1") {
+      if override_header {
+        FieldNameMode::A1
+      } else {
+        FieldNameMode::AutoA1
+      }
+    } else if system.starts_with_ci("c") || system.starts_with_ci("n") {
+      if override_header {
+        FieldNameMode::NumPadded
+      } else {
+        FieldNameMode::AutoNumPadded
+      }
+    } else {
+      FieldNameMode::A1
+    }
+  }
+
   pub fn use_a1(&self) -> bool {
     match self {
       Self::AutoA1 | Self::A1 => true,
