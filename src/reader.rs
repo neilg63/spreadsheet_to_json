@@ -82,7 +82,7 @@ pub async fn read_workbook_core<'a> (
       let match_header_row_below = capture_headers && header_row_index > 0;
 
       if let Some(first_row) = range.headers() {
-        headers = build_header_keys(&first_row, &columns);
+        headers = build_header_keys(&first_row, &columns, &opts.field_mode);
         has_headers = !match_header_row_below;
       }
       let total = source_rows.clone().count();
@@ -99,7 +99,7 @@ pub async fn read_workbook_core<'a> (
           }
           if match_header_row_below && (row_index + 1) == header_row_index {
             let h_row= row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
-            headers = build_header_keys(&h_row, &columns);
+            headers = build_header_keys(&h_row, &columns, &opts.field_mode);
             has_headers = true;
           } else if (has_headers || !capture_headers) && capture_rows{
             // only capture rows if headers are either omitted or have already been captured
@@ -174,7 +174,7 @@ pub async fn read_csv_core<'a>(
           // has_headers = true;
       }
       let columns = opts.rows.columns.clone();
-      headers = build_header_keys(&headers, &columns);
+      headers = build_header_keys(&headers, &columns, &opts.field_mode);
     }
     
     let mut total = 0;

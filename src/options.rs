@@ -1,4 +1,5 @@
 use serde_json::{json, Error, Value};
+use simple_string_patterns::SimpleMatch;
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
 /// default max number of rows without an override via ->max_row_count(max_row_count)
@@ -16,6 +17,22 @@ impl RowOptionSet {
   pub fn column(&self, index: usize) -> Option<&Column> {
     self.columns.get(index)
   }
+
+  pub fn date_mode(&self) -> String {
+    if self.date_only {
+      "date only"
+    } else {
+      "date/time"
+    }.to_string()
+  }
+
+  pub fn decimal_separator(&self) -> String {
+    if self.euro_number_format {
+      ","
+    } else {
+      "."
+    }.to_string()
+  }
 }
 
 /// Core options with nested row options
@@ -30,6 +47,7 @@ pub struct OptionSet {
   pub omit_header: bool,
   pub header_row: u8,
   pub read_mode: ReadMode,
+  pub field_mode: FieldNameMode
 }
 
 impl OptionSet {
@@ -45,6 +63,7 @@ impl OptionSet {
       omit_header: false,
       header_row: 0,
       read_mode: ReadMode::Sync,
+      field_mode: FieldNameMode::AutoA1
     }
 }
 
@@ -72,7 +91,7 @@ impl OptionSet {
       self
   }
 
-  /// Sets the header row number.
+  /// Sets the header row index
   pub fn header_row(&mut self, row: u8) -> &mut Self {
       self.header_row = row;
       self
@@ -90,6 +109,42 @@ impl OptionSet {
       self
   }
 
+  /// Sets the column key naming convetion
+  pub fn field_name_mode(&mut self, system: &str, override_header: bool) -> &mut Self {
+    self.field_mode = if system.starts_with_ci("a1") {
+      if override_header {
+        FieldNameMode::A1
+      } else {
+        FieldNameMode::AutoA1
+      }
+    } else if system.starts_with_ci("c") || system.starts_with_ci("n") {
+      if override_header {
+        FieldNameMode::NumPadded
+      } else {
+        FieldNameMode::AutoNumPadded
+      }
+    } else {
+      FieldNameMode::A1
+    };
+    self
+}
+
+  pub fn row_mode(&self) -> String {
+    if self.jsonl {
+      "json lines"
+    } else {
+      ""
+    }.to_string()
+  }
+
+  pub fn header_mode(&self) -> String {
+    if self.jsonl {
+      "json lines"
+    } else {
+      ""
+    }.to_string()
+  }
+
    pub fn to_json(&self) -> Value {
     json!({
       "sheet": {
@@ -97,7 +152,7 @@ impl OptionSet {
         "index": self.index,
       },
       "path": self.path.clone().unwrap_or("".to_string()),
-      "euro_number_format": self.rows.euro_number_format,
+      "decimal_separator": self.rows.decimal_separator(),
       "date_only": self.rows.date_only,
       "columns": self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect::<Vec<Value>>(),
       "max": self.max.unwrap_or(0),
@@ -107,7 +162,35 @@ impl OptionSet {
     })
   }
 
-  
+  pub fn to_lines(&self) -> Vec<String> {
+
+    let mut lines = vec![];
+    if let Some(s_name) = self.sheet.clone() {
+      lines.push(format!("sheet name: {}", s_name));
+    } else if self.index > 0 {
+      lines.push(format!("sheet index: {}", self.index));
+    }
+    if let Some(path) = self.path.clone() {
+      lines.push(format!("path: {}", path));
+    }
+    lines.extend(vec![
+      format!("max: {}", self.max.unwrap_or(0) ),
+      format!("header row: {}", self.header_row),
+      format!("headers: {}", self.header_mode()),
+      format!("mode: {}", self.row_mode()),
+      format!("decimal separator: {}", self.rows.decimal_separator()),
+      format!("date mode: {}", self.rows.date_mode())
+    ]);
+
+    if self.columns().len() > 0 {
+      lines.push("columns:".to_string());
+      for col in self.rows.columns.clone() {
+        lines.push(col.to_line());
+      }
+      
+    }
+    lines
+  }
   /// header row index as usize
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
@@ -235,7 +318,7 @@ impl Column {
   }
 
   pub fn from_key_ref_with_format(key_opt: Option<&str>, index: usize, format: Format, default: Option<Value>, date_only: bool, euro_number_format: bool) -> Self {
-    let key = key_opt.map(Arc::from).unwrap_or_else(|| Arc::from(to_head_key(index)));
+    let key = key_opt.map(Arc::from).unwrap_or_else(|| Arc::from(to_head_key_default(index)));
     Column {
       key,
       format,
@@ -249,10 +332,35 @@ impl Column {
     json!({
       "key": self.key.to_string(),
       "format": self.format.to_string(),
+      "default": self.default,
       "date_only": self.date_only,
-      "euro_number_format": self.euro_number_format,
-      "default": self.default
+      "euro_number_format": self.euro_number_format
     })
+  }
+
+  pub fn to_line(&self) -> String {
+    let date_only_str = if self.date_only {
+      ", date only"
+    } else {
+      ""
+    }.to_owned();
+    let def_string = if let Some(def_val) = self.default.clone() {
+      format!("default: {}", def_val.to_string())
+    } else {
+      "".to_string()
+    };
+    let comma_str = if self.euro_number_format {
+      ", decimal comma"
+    } else {
+      ""
+    };
+    format!(
+      "\tkey {}, format {}{}{}{}",
+      self.key.to_string(),
+      self.format.to_string(),
+      def_string,
+      date_only_str,
+      comma_str)
   }
 
 }
@@ -372,7 +480,7 @@ impl<'a> PathData<'a> {
 
 
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReadMode {
   #[default]
   Sync,
@@ -393,6 +501,34 @@ impl ReadMode {
   pub fn is_full_async(&self) -> bool {
     match self {
       Self::Async => true,
+      _ => false
+    }
+  }
+}
+
+/// defines the column key naming convention
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FieldNameMode {
+  #[default]
+  AutoA1, // will use A1 column keys if headers are unavailable
+  AutoNumPadded, // will use C01 format if column headers are unavailable
+  A1, // Defaults to A1 columns unless custom keys are added
+  NumPadded // Defaults to C01 format unless custom keys are added
+}
+
+/// either Preview or Async mode
+impl FieldNameMode {
+  pub fn use_a1(&self) -> bool {
+    match self {
+      Self::AutoA1 | Self::A1 => true,
+      _ => false
+    }
+  }
+
+  /// not preview or sync mode
+  pub fn use_c01(&self) -> bool {
+    match self {
+      Self::AutoNumPadded | Self::NumPadded => true,
       _ => false
     }
   }

@@ -8,7 +8,7 @@ use simple_string_patterns::*;
 use crate::{OptionSet, PathData, ReadMode};
 
 
-
+/// Core info about a spreadsheet with extension, matched worksheet name and index an all worksheet keys
 #[derive(Debug, Clone)]
 pub struct WorkbookInfo {
     pub filename: String,
@@ -107,6 +107,31 @@ impl ResultSet {
       result["outref"] = json!(out_ref_str);
     }
     result
+  }
+
+   /// Full result set as CLI-friendly lines
+   pub fn to_output_lines(&self, json_lines: bool) -> Vec<String> {
+    let mut lines = vec![
+      format!("name:{}", self.filename),
+      format!("extension: {}", self.extension),
+      format!("sheet: name: {}, index: {}", self.sheet.0, self.sheet.1),
+      format!("sheets: {}", self.sheets.join(", ")),
+      format!("row count: {}", self.num_rows),
+      format!("fields: {}", self.num_rows),
+    ];
+    if let Some(out_ref_str) = self.out_ref.clone() {
+      lines.push(format!("output reference: {}", out_ref_str));
+    } else {
+      lines.push("data:".to_owned());
+      if json_lines {
+        for item in &self.data {
+          lines.push(format!("{}", json!(item)));
+        }
+      } else {
+        lines.push(format!("{}", json!(self.data)));
+      }
+    }
+    lines
   }
 
   /// Extract the vector of rows as Index Maps of JSON values

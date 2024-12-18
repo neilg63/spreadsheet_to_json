@@ -1,55 +1,56 @@
 
 use heck::ToSnakeCase;
 
-use crate::Column;
-
-pub fn to_radix_groups_with_offset_option(n: u32, radix: u32, index_offset: bool) -> Vec<u32> {
-    let mut result = Vec::new();
-    let mut num = n;
-    let mut not_first = false;
-    while num > 0 {
-        let offset = if not_first && index_offset {
-            1
-        } else {
-            0
-        };
-        result.push(num % radix - offset);
-        num /= radix;
-        not_first = true;
-    }
-
-    result.reverse(); // Because we've pushed the least significant digit first
-    result
-}
-
-#[allow(dead_code)]
-pub fn to_radix_groups(n: u32, radix: u32) -> Vec<u32> {
-    to_radix_groups_with_offset_option(n, radix, false)
-}
-
-
-pub fn to_radix_groups_offset(n: u32, radix: u32) -> Vec<u32> {
-    to_radix_groups_with_offset_option(n, radix, true)
-}
+use crate::{Column, FieldNameMode};
 
 pub fn to_letter(index: u32) -> char {
-    char::from_u32(97 + index).unwrap_or(' ')
+    char::from_u32(97 + index).unwrap_or(' ') // Use 97 for 'a'
 }
 
-pub fn to_head_key(index: usize) -> String {
-    if index < 1 {
-        'a'.to_string()
+pub fn to_a1_col_key(index: usize) -> String {
+    let mut result = String::new();
+    let mut n = index as i32; // Work with i32 to handle potential negative values
+
+    while n >= 0 {
+        let remainder = (n % 26) as u8;
+        result.push((b'a' + remainder) as char);
+        n = (n / 26) - 1;
+    }
+    result.chars().rev().collect()
+}
+
+pub fn to_c01_col_key(index: usize, num_cols: usize) -> String {
+    let width = if num_cols < 100 {
+        2
+    } else if num_cols < 1000 {
+        3
+    } else if num_cols < 10000 {
+        4
     } else {
-        let groups = to_radix_groups_offset(index as u32, 26);
-        groups.into_iter().map(|ci| to_letter(ci)).collect::<String>() 
+        5
+    };
+    let num = index + 1;
+    format!("c{:0width$}", num, width = width)
+}
+
+pub fn to_head_key(index: usize, field_mode: &FieldNameMode, num_cols: usize) -> String {
+    if field_mode.use_a1() {
+        to_c01_col_key(index, num_cols)
+    } else {
+        to_a1_col_key(index)
     }
 }
 
-pub fn build_header_keys(first_row: &[String], columns: &[Column]) -> Vec<String> {
+pub fn to_head_key_default(index: usize) -> String {
+    to_c01_col_key(index, 1000)
+}
+
+pub fn build_header_keys(first_row: &[String], columns: &[Column], field_mode: &FieldNameMode) -> Vec<String> {
 let mut h_index = 0;
     let num_cells = first_row.len();
     let mut headers: Vec<String> = vec![];
-    let num_pop_header_cells = first_row.len();
+    let num__cols = first_row.len();
+    let num_pop_header_cells = num__cols;
     let add_custom_headers = num_pop_header_cells >= num_cells;
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
@@ -59,7 +60,7 @@ let mut h_index = 0;
             if add_custom_headers && sn.len() > 0 {
                 headers.push(sn);
             } else {
-                headers.push(to_head_key(h_index));
+                headers.push(to_head_key(h_index, field_mode, num__cols));
             }
         }
         h_index += 1;
@@ -80,32 +81,36 @@ mod tests {
     }
 
     #[test]
-    fn test_radix_groups() {
+    fn test_cell_letters_1() {
 
-        assert_eq!(to_radix_groups(27, 26), vec![1, 1]);
-
-
-        assert_eq!(to_radix_groups(24, 26), vec![24]);
-
-        assert_eq!(to_radix_groups(56, 26), vec![2, 4]);
+        assert_eq!(to_a1_col_key(26), "aa");
     }
 
     #[test]
-    fn test_radix_groups_offset() {
+    fn test_cell_letters_2() {
 
-        assert_eq!(to_radix_groups_offset(27, 26), vec![0, 1]);
-
-        assert_eq!(to_radix_groups_offset(26, 26), vec![0, 0]);
-
-
-        assert_eq!(to_radix_groups_offset(24, 26), vec![24]);
-
-        assert_eq!(to_radix_groups_offset(56, 26), vec![1, 4]);
+        assert_eq!(to_a1_col_key(701), "zz");
     }
 
     #[test]
-    fn test_cell_letters() {
+    fn test_cell_letters_3() {
 
-        assert_eq!(to_head_key(26), "aa");
+        assert_eq!(to_a1_col_key(702), "aaa");
+    }
+
+    #[test]
+    fn test_cell_letters_4() {
+
+        assert_eq!(to_c01_col_key(8, 60), "c09");
+    }
+
+    #[test]
+    fn test_cell_letters_5() {
+        assert_eq!(to_c01_col_key(20, 750), "c021");
+    }
+
+    #[test]
+    fn test_cell_letters_6() {
+        assert_eq!(to_c01_col_key(20, 2000), "c0021");
     }
 }
