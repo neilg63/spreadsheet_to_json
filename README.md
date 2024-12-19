@@ -44,7 +44,7 @@ use spreadsheet_to_json::tokio;
 
 #[tokio:main]
 async fn main() -> Result((), Error) {
-  let opts = Opts::new("path/to/spreadsheet.xslx")->set_sheet_index(1);
+  let opts = Opts::new("path/to/spreadsheet.xlsx")->set_sheet_index(1);
   let result = render_spreadsheet_direct(&opts).await;
   let json_value = match result {
     Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
