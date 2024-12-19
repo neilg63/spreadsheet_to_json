@@ -49,8 +49,8 @@ pub fn build_header_keys(first_row: &[String], columns: &[Column], field_mode: &
 let mut h_index = 0;
     let num_cells = first_row.len();
     let mut headers: Vec<String> = vec![];
-    let num__cols = first_row.len();
-    let num_pop_header_cells = num__cols;
+    let num_cols = first_row.len();
+    let num_pop_header_cells = num_cols;
     let add_custom_headers = num_pop_header_cells >= num_cells && field_mode.keep_headers();
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
@@ -60,7 +60,7 @@ let mut h_index = 0;
             if add_custom_headers && sn.len() > 0 {
                 headers.push(sn);
             } else {
-                headers.push(to_head_key(h_index, field_mode, num__cols));
+                headers.push(to_head_key(h_index, field_mode, num_cols));
             }
         }
         h_index += 1;
