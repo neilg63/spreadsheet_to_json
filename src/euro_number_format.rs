@@ -59,19 +59,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lnumber_format_1() {
+    fn test_number_format_1() {
         let sample = "1.256";
         assert_eq!(is_euro_number_format(sample, false), false);
     }
 
     #[test]
-    fn test_lnumber_format_2() {
+    fn test_number_format_2() {
         let sample = "1,256";
         assert_eq!(is_euro_number_format(sample, false), false);
     }
 
     #[test]
-    fn test_lnumber_format_3() {
+    fn test_number_format_3() {
 
         let sample = "12,56";
         
@@ -79,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lnumber_format_4() {
+    fn test_number_format_4() {
 
         let sample = "1,256.67";
         
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lnumber_format_5() {
+    fn test_number_format_5() {
 
         let sample = "1.256,67";
         

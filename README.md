@@ -31,7 +31,7 @@ Full explanation of options to come.
 
 ## Alpha warning
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
-- **0.1.2** All public error types now use the GenericError error type
+- **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
 
 ## Examples
