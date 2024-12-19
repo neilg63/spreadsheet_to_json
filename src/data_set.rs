@@ -117,7 +117,7 @@ impl ResultSet {
       format!("sheet: name: {}, index: {}", self.sheet.0, self.sheet.1),
       format!("sheets: {}", self.sheets.join(", ")),
       format!("row count: {}", self.num_rows),
-      format!("fields: {}", self.num_rows),
+      format!("fields: {}", self.keys.join(",")),
     ];
     if let Some(out_ref_str) = self.out_ref.clone() {
       lines.push(format!("output reference: {}", out_ref_str));

@@ -34,7 +34,7 @@ pub fn to_c01_col_key(index: usize, num_cols: usize) -> String {
 }
 
 pub fn to_head_key(index: usize, field_mode: &FieldNameMode, num_cols: usize) -> String {
-    if field_mode.use_a1() {
+    if field_mode.use_c01() {
         to_c01_col_key(index, num_cols)
     } else {
         to_a1_col_key(index)
@@ -51,7 +51,7 @@ let mut h_index = 0;
     let mut headers: Vec<String> = vec![];
     let num__cols = first_row.len();
     let num_pop_header_cells = num__cols;
-    let add_custom_headers = num_pop_header_cells >= num_cells;
+    let add_custom_headers = num_pop_header_cells >= num_cells && field_mode.keep_headers();
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
         if let Some(col) = columns.get(h_index) {

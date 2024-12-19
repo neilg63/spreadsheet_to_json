@@ -165,7 +165,8 @@ impl OptionSet {
       format!("headers: {}", self.header_mode()),
       format!("mode: {}", self.row_mode()),
       format!("decimal separator: {}", self.rows.decimal_separator()),
-      format!("date mode: {}", self.rows.date_mode())
+      format!("date mode: {}", self.rows.date_mode()),
+      format!("column style: {}", self.field_mode.to_string())
     ]);
 
     if self.columns().len() > 0 {
@@ -524,6 +525,7 @@ impl FieldNameMode {
     }
   }
 
+  /// use AQ column field style
   pub fn use_a1(&self) -> bool {
     match self {
       Self::AutoA1 | Self::A1 => true,
@@ -531,12 +533,36 @@ impl FieldNameMode {
     }
   }
 
-  /// not preview or sync mode
+  /// use c01 column field style
   pub fn use_c01(&self) -> bool {
     match self {
       Self::AutoNumPadded | Self::NumPadded => true,
       _ => false
     }
+  }
+
+   /// use seqquential a1 or C01 column style unless custom overrides are added
+   pub fn override_headers(&self) -> bool {
+    match self {
+      Self::NumPadded | Self::A1 => true,
+      _ => false
+    }
+  }
+
+  /// use default headers if available unless override by custom headers
+  pub fn keep_headers(&self) -> bool {
+    self.override_headers() == false
+  }
+}
+
+impl ToString for FieldNameMode {
+  fn to_string(&self) -> String {
+    match self {
+      Self::AutoNumPadded => "C01 auto",
+      Self::NumPadded => "C01 override",
+      Self::A1 => "A! override",
+      _ => "A! auto",
+    }.to_string()    
   }
 }
 
