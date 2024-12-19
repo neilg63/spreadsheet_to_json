@@ -360,6 +360,7 @@ pub enum Extension {
   Unmatched,
   Ods,
   Xlsx,
+  Xlsb,
   Xls,
   Csv,
   Tsv,
@@ -373,6 +374,7 @@ impl Extension {
         return match  ext_lc.as_str() {
           "ods" => Extension::Ods,
           "xlsx" => Extension::Xlsx,
+          "xlsb" => Extension::Xlsb,
           "xls" => Extension::Xls,
           "csv" => Extension::Csv,
           "tsv" => Extension::Tsv,
@@ -386,7 +388,7 @@ impl Extension {
   /// use the Calamine library
   pub fn use_calamine(&self) -> bool {
     match self {
-      Self::Ods | Self::Xlsx | Self::Xls => true,
+      Self::Ods | Self::Xlsx | Self::Xlsb | Self::Xls => true,
       _ => false
     }
   }
@@ -408,6 +410,7 @@ impl ToString for Extension {
     match self {
       Self::Ods => "ods",
       Self::Xlsx => "xlsx",
+      Self::Xlsb => "xlsb",
       Self::Xls => "xls",
       Self::Csv => "csv",
       Self::Tsv => "tsv",

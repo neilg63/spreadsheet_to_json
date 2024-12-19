@@ -2,7 +2,9 @@
 [![crates.io](https://img.shields.io/crates/v/spreadsheet-to-json.svg)](https://crates.io/crates/spreadsheet-to-json)
 [![docs.rs](https://docs.rs/spreadsheet-to-json/badge.svg)](https://docs.rs/spreadsheet-to-json)
 
-# spreadsheet-to-json: Convert Spreadsheets and CSV files to jSON
+# spreadsheet-to-json
+
+## Convert Spreadsheets and CSV files to jSON
 
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
@@ -10,14 +12,15 @@ It relies on the [Calamine](https://crates.io/crates/calamine) and [CSV](https:/
 
 It supports the following formats:
 
-- Excel 2007 (*.xlsx*)
-- Excel 97-2004 (*.xls*)
+- Excel 2007+ Workbook (*.xlsx*)
+- Excel 2007+ Binary (*.xlsb*)
+- Excel 97-2004 Legacy (*.xls*)
 - OpenDocument Spreadsheets (*.ods*) compatible with LibreOffice
-- CSV: (.csv) comma separated values
-- TSV: (.tsv) tab-separated values
+- CSV: comma separated values (*.csv*)
+- TSV: tab-separated values (*.tsv*)
 
 ## Features
-- Blazingly fast
+- Blazingly fast. It can import 10,000 rows in 0.4 seconds.
 - Can export to standard JSON or to JSON lines when writing large files
 - Formula cells are read as calculated values
 - Can identify and convert both Excel's 1900 datetime format and standard ISO format as used in OpenDocument Spreadsheet
@@ -32,12 +35,15 @@ Full explanation of options to come.
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
-
+- **0.1.4** Added support for Excel Binary format (.xlsb)
 ## Examples
 
 The main implementation is my unpublished [Spreadsheet to JSON CLI](https://github.com/neilg63/spreadsheet_to_json_cli) crate,
 
-### Simple immediate parsing. This must be called in an async function.
+### Simple immediate jSON conversion
+
+This must be called in an async function.
+
 ```rust
 use spreadsheet_to_json::*;
 use spreadsheet_to_json::tokio;
@@ -55,7 +61,9 @@ async fn main() -> Result((), Error) {
 ```
 
 
-### Asynchronous parsing. This must be called in an async function.
+### Asynchronous parsing saving to a database
+
+This must be called in an async function.
 ```rust
 use spreadsheet_to_json::*;
 use spreadsheet_to_json::tokio;
