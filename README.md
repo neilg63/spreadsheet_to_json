@@ -13,15 +13,14 @@ It supports the following formats:
 - Excel 2007 (*.xlsx*)
 - Excel 97-2004 (*.xls*)
 - OpenDocument Spreadsheets (*.ods*) compatible with LibreOffice
-- CSV: comma separated files
-- TSV: Tab-separated files 
+- CSV: (.csv) comma separated values
+- TSV: (.tsv) tab-separated values
 
 ## Features
-
 - Blazingly fast
 - Can export to standard JSON or to JSON lines when writing large files
-* Formula cells are read as calculated values
-* Can identify and convert both Excel's 1900 datetime format and standard ISO format as used in OpenDocument Spreadsheet
+- Formula cells are read as calculated values
+- Can identify and convert both Excel's 1900 datetime format and standard ISO format as used in OpenDocument Spreadsheet
 - Can identify numeric fields formatted as text and convert them to integers or floats.
 - Can identify truthy text or number cells and convert them to booleans
 - Can save large files asynchronously
