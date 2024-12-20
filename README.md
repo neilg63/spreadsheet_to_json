@@ -44,14 +44,14 @@ The main implementation is my unpublished [Spreadsheet to JSON CLI](https://gith
 
 ### Simple immediate jSON conversion
 
-This function processes the spreadsheet file immediately
+This function processes the spreadsheet file immediately. 
 
 ```rust
 use spreadsheet_to_json::*;
 
 fn main() -> Result((), Error) {
   let opts = Opts::new("path/to/spreadsheet.xlsx")->set_sheet_index(1);
-  let result = render_spreadsheet_direct(&opts);
+  let result = process_spreadsheet_direct(&opts);
   let json_value = match result {
     Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
     Ok(data_set) => data_set.to_json() // full result set
