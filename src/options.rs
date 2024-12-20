@@ -54,66 +54,66 @@ impl OptionSet {
   /// Instantiates a new option set with a path string for file operations.
   pub fn new(path_str: &str) -> Self {
     OptionSet {
-      sheet: None,
-      index: 0,
-      path: Some(path_str.to_string()),
-      rows: RowOptionSet::default(),
-      jsonl: false,
-      max: None,
-      omit_header: false,
-      header_row: 0,
-      read_mode: ReadMode::Sync,
-      field_mode: FieldNameMode::AutoA1
+        sheet: None,
+        index: 0,
+        path: Some(path_str.to_string()),
+        rows: RowOptionSet::default(),
+        jsonl: false,
+        max: None,
+        omit_header: false,
+        header_row: 0,
+        read_mode: ReadMode::Sync,
+        field_mode: FieldNameMode::AutoA1,
     }
-}
-
+  }
 
   /// Sets the sheet name for the operation.
-  pub fn sheet_name(&mut self, name: String) -> &mut Self {
-      self.sheet = Some(name);
-      self
+  pub fn sheet_name(mut self, name: String) -> Self {
+    self.sheet = Some(name);
+    self
   }
 
   /// Sets the sheet index.
-  pub fn sheet_index(&mut self, index: u32) -> &mut Self {
+  pub fn sheet_index(mut self, index: u32) -> Self {
       self.index = index;
       self
   }
+
   /// Sets JSON Lines mode to true.
-  pub fn json_lines(&mut self) -> &mut Self {
+  pub fn json_lines(mut self) -> Self {
       self.jsonl = true;
       self
   }
 
   /// Omits the header when reading.
-  pub fn omit_header(&mut self) -> &mut Self {
+  pub fn omit_header(mut self) -> Self {
       self.omit_header = true;
       self
   }
 
-  /// Sets the header row index
-  pub fn header_row(&mut self, row: u8) -> &mut Self {
+  /// Sets the header row index.
+  pub fn header_row(mut self, row: u8) -> Self {
       self.header_row = row;
       self
   }
 
   /// Sets the maximum number of rows to read.
-  pub fn max_row_count(&mut self, max: u32) -> &mut Self {
+  pub fn max_row_count(mut self, max: u32) -> Self {
       self.max = Some(max);
       self
   }
 
   /// Sets the read mode to asynchronous.
-  pub fn read_mode_async(&mut self) -> &mut Self {
+  pub fn read_mode_async(mut self) -> Self {
       self.read_mode = ReadMode::Async;
       self
   }
 
-  /// Sets the column key naming convetion
-  pub fn field_name_mode(&mut self, system: &str, override_header: bool) -> &mut Self {
-    self.field_mode = FieldNameMode::from_key(system, override_header);
-    self
-}
+  /// Sets the column key naming convention.
+  pub fn field_name_mode(mut self, system: &str, override_header: bool) -> Self {
+      self.field_mode = FieldNameMode::from_key(system, override_header);
+      self
+  }
 
   pub fn row_mode(&self) -> String {
     if self.jsonl {
@@ -231,6 +231,7 @@ pub enum Format {
   Boolean, // Boolean or  cast to boolean from integers
   Date, // Interpret as date only
   DateTime, // Interpret as full datetime
+  DateTimeCustom(Arc<str>),
   Truthy, // interpret common yes/no, y/n, true/false text strings as true/false
   #[allow(dead_code)]
   TruthyCustom(Arc<str>, Arc<str>) // define custom yes/no values
@@ -246,6 +247,7 @@ impl ToString for Format {
       Self::Boolean => "boolean",
       Self::Date => "date",
       Self::DateTime => "datetime",
+      Self::DateTimeCustom(fmt) => &format!("datetime({})", fmt),
       Self::Truthy => "truthy",
       Self::TruthyCustom(yes, no) => &format!("truthy({},{})", yes, no),
     };
@@ -269,9 +271,24 @@ impl FromStr for Format {
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
         "tr" | "truthy" => Self::Truthy,
-        _ => Self::Auto,
+        _ => {
+          if let Some(str) = match_custom_dt(key) {
+            Self::DateTimeCustom(Arc::from(str))
+          } else {
+            Self::Auto
+          }
+        },
       };
       Ok(fmt)
+  }
+}
+
+fn match_custom_dt(key: &str) -> Option<String> {
+  let test_str = key.trim();
+  if test_str.starts_with_ci("dt:") {
+    Some(test_str[3..].to_string())
+  } else {
+    None
   }
 }
 
