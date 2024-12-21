@@ -37,7 +37,7 @@ pub async fn render_spreadsheet_direct(opts: &OptionSet) -> Result<ResultSet, Ge
 }
 
 /// Output the result set with deferred row saving and optional output reference
-pub async fn render_spreadsheet_async(
+pub async fn process_spreadsheet_async(
   opts: &OptionSet,
   save_func: Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
   out_ref: Option<&str>

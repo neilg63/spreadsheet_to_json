@@ -40,13 +40,18 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.omit_header(index: u8)` omit the header altogether and assign default *A1-style* keys or column numbers.
 - `.sheet_index(index: u32)` zero-based sheer index. Any value over zero will override the specified sheet name.
 - `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
-- `.read_mode_async()` Defer processing of rows via a callback to the second argument in render_spreadsheet_async() 
+- `.read_mode_async()` Defer processing of rows with a callback in the second argument in render_spreadsheet_async() 
 - `.json_lines()` Output will be rendered one json object per row.
 
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
-```rust 
-  let opts = OptionsSet::new("path/to/spreadsheet.ods").sheet_index(3).read_mode_async();
+- `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
 
+Simple example:
+```rust 
+  let opts = OptionsSet::new("path/to/spreadsheet.ods")
+      .sheet_index(3)
+      .read_mode_async()
+      .override_headers(&["name", "height", "width", "weight", "hue", "price"]);
 ```
 
 ## Core functions

@@ -45,6 +45,7 @@ pub fn to_head_key_default(index: usize) -> String {
     to_c01_col_key(index, 1000)
 }
 
+/// Build header keys from the first row of a CSV file or headers captured from a spreadsheet
 pub fn build_header_keys(first_row: &[String], columns: &[Column], field_mode: &FieldNameMode) -> Vec<String> {
 let mut h_index = 0;
     let mut headers: Vec<String> = vec![];
@@ -54,6 +55,7 @@ let mut h_index = 0;
         let sn = h_row.to_snake_case();
         let mut has_override = false;
         if let Some(col) = columns.get(h_index) {
+            // only apply override if key is not empty
             if col.key.len() > 0 {
                 headers.push(col.key.to_string());
                 has_override = true;
