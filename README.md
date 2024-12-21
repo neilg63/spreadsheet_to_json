@@ -58,8 +58,27 @@ Simple example:
 
 - `process_spreadsheet_direct(opts: &OptionSet)`: May be called in a synchronous context where you need to process results immediately.
 
+- `process_spreadsheet_async(opts: &OptionSet)`: Asynchronously processes files with a callback function to save each row.
 
+## Result set
 
+- `filename`: Matched filename,
+- `extension`: Matched extension
+- `sheet`: Matched worksheet name and index
+- `sheets`: List of available worksheet names
+- `keys`: Assigned column keys
+- `num_rows`: number of rows in the source file that have been successfully parsed
+- `data`: Vector of dynamic objects (IndexMap<String, Value>) that can be easily translated into JSON or other common formats.
+- `out_ref`: Optional output reference such as a generated file name, URL or database id.
+
+If the file name and extension cannot be matched, because the file is unavailable or unsupported, the core functions will return a generic error.
+
+### Result Set methods
+
+- `to_json()`: Converts to the result set to `serde_json::Value` that may be printed directly or written to a file.
+- `to_output_lines(json_lines: bool)`: Returns a vector of plain-text results with each data row as JSON on a new line
+- `rows()`: Returns a vector of rendered JSON strings
+- `json_rows(json_lines: bool)`: Returns all data rows as `serde_json::Value::Array` ready for conversion
 
 ## Alpha Version History
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
