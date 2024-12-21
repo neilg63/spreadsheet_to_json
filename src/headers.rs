@@ -52,9 +52,14 @@ let mut h_index = 0;
     let keep_headers = field_mode.keep_headers();
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
+        let mut has_override = false;
         if let Some(col) = columns.get(h_index) {
-            headers.push(col.key.to_string());
-        } else {
+            if col.key.len() > 0 {
+                headers.push(col.key.to_string());
+                has_override = true;
+            }
+        } 
+        if !has_override {
             if keep_headers && sn.len() > 0 {
                 headers.push(sn);
             } else {
