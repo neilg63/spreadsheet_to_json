@@ -36,6 +36,15 @@ pub async fn render_spreadsheet_direct(opts: &OptionSet) -> Result<ResultSet, Ge
   render_spreadsheet_core(opts, None, None).await
 }
 
+/// Output the result set with deferred row saving and optional output reference
+pub async fn render_spreadsheet_async(
+  opts: &OptionSet,
+  save_func: Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
+  out_ref: Option<&str>
+  ) -> Result<ResultSet, GenericError> {
+  render_spreadsheet_core(opts, Some(save_func), out_ref).await
+}
+
 /// Output the result set with captured rows (up to the maximum allowed) directly.
 /// with optional asynchronous row save method and output reference
 pub async fn render_spreadsheet_core(

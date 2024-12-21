@@ -1,3 +1,4 @@
+use heck::ToSnakeCase;
 use serde_json::{json, Error, Value};
 use simple_string_patterns::SimpleMatch;
 use crate::headers::*;
@@ -8,12 +9,31 @@ pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// Row parsing options with nested column options
 #[derive(Debug, Clone, Default)]
 pub struct RowOptionSet {
+  pub columns: Vec<Column>,
   pub euro_number_format: bool, // always parse as euro number format
   pub date_only: bool,
-  pub columns: Vec<Column>,
 }
 
 impl RowOptionSet {
+
+  // simple constructor with column keys only
+  pub fn simple(cols: &[Column]) -> Self {
+    RowOptionSet {
+      euro_number_format: false,
+      date_only: false,
+      columns: cols.to_vec()
+    }
+  }
+
+  // lets you set all options
+  pub fn new(cols: &[Column], decimal_comma: bool, date_only: bool) -> Self {
+    RowOptionSet {
+      euro_number_format: decimal_comma,
+      date_only,
+      columns: cols.to_vec()
+    }
+  }
+
   pub fn column(&self, index: usize) -> Option<&Column> {
     self.columns.get(index)
   }
@@ -109,6 +129,18 @@ impl OptionSet {
       self
   }
 
+  /// Override matched and unmatched headers with custom headers.
+  pub fn override_headers(mut self, keys: &[&str]) -> Self {
+    let mut columns: Vec<Column> = Vec::with_capacity(keys.len());
+    let mut index = 0;
+    for ck in keys {
+        columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
+        index += 1;
+    }
+    self.rows = RowOptionSet::simple(&columns);
+    self
+  }
+
   /// Sets the column key naming convention.
   pub fn field_name_mode(mut self, system: &str, override_header: bool) -> Self {
       self.field_mode = FieldNameMode::from_key(system, override_header);
@@ -131,7 +163,7 @@ impl OptionSet {
     }.to_string()
   }
 
-   pub fn to_json(&self) -> Value {
+  pub fn to_json(&self) -> Value {
     json!({
       "sheet": {
         "key": self.sheet.clone().unwrap_or("".to_string()),
@@ -149,7 +181,6 @@ impl OptionSet {
   }
 
   pub fn to_lines(&self) -> Vec<String> {
-
     let mut lines = vec![];
     if let Some(s_name) = self.sheet.clone() {
       lines.push(format!("sheet name: {}", s_name));
@@ -174,10 +205,10 @@ impl OptionSet {
       for col in self.rows.columns.clone() {
         lines.push(col.to_line());
       }
-      
     }
     lines
   }
+
   /// header row index as usize
   pub fn header_row_index(&self) -> usize {
     self.header_row as usize
@@ -186,7 +217,7 @@ impl OptionSet {
   /// set the maximum of rows to be output synchronously
   pub fn max_rows(&self) -> usize {
     if self.read_mode == ReadMode::PreviewAsync {
-      return 20
+      return 20;
     }
     if let Some(mr) = self.max {
       mr as usize
@@ -218,6 +249,7 @@ impl OptionSet {
       _ => true
     }
   }
+
 }
 
 
@@ -251,7 +283,7 @@ impl ToString for Format {
       Self::Truthy => "truthy",
       Self::TruthyCustom(yes, no) => &format!("truthy({},{})", yes, no),
     };
-    result.to_string() 
+    result.to_string() // Convert the string slice to a String
   }
 }
 

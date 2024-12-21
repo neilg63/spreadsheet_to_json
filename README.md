@@ -31,12 +31,37 @@ It supports the following formats:
 ## To do
 Full explanation of options to come.
 
-## Alpha warning
+## Core Options
+
+Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")` with chained setter methods:
+
+- `.max_row_count(max: u32)`: overrides the default max row count of 10,000. Use this is direct mode or to return only the first *n* rows.
+- `.header_row(index: u8)` overrides the default header row index of 0, useful for spreadsheets with a title and notes on top
+- `.omit_header(index: u8)` omit the header altogether and assign default *A1-style* keys or column numbers.
+- `.sheet_index(index: u32)` zero-based sheer index. Any value over zero will override the specified sheet name.
+- `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
+- `.read_mode_async()` Defer processing of rows via a callback to the second argument in render_spreadsheet_async() 
+- `.json_lines()` Output will be rendered one json object per row.
+
+- `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
+```rust 
+  let opts = OptionsSet::new("path/to/spreadsheet.ods").sheet_index(3).read_mode_async();
+
+```
+
+## Core functions
+
+- `process_spreadsheet_direct(opts: &OptionSet)`: May be called in a synchronous context where you need to process results immediately.
+
+
+
+
+## Alpha Version History
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
 - **0.1.4** Added support for Excel Binary format (.xlsb)
-- **0.1.5** The core function render_spreadsheet_direct(Path: &str) is now synchronous and can be called without explicitly importing the tokio runtime unless your application needs it.
+- **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_direct()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function, you should use `render_spreadsheet_direct()` instead.
 
 ## Examples
 
@@ -77,7 +102,7 @@ async fn main() -> Result((), GenericError) {
     save_data_row(row, &connection, dataset_id)
   };
 
-  let result = render_spreadsheet_core(&opts, Some(callback), Some(dataset_id)).await;
+  let result = process_spreadsheet_async(&opts, callback, Some(dataset_id)).await;
   let result_set = match result {
       Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
       Ok(data_set) => data_set.to_json() // full result set

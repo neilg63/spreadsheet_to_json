@@ -47,17 +47,15 @@ pub fn to_head_key_default(index: usize) -> String {
 
 pub fn build_header_keys(first_row: &[String], columns: &[Column], field_mode: &FieldNameMode) -> Vec<String> {
 let mut h_index = 0;
-    let num_cells = first_row.len();
     let mut headers: Vec<String> = vec![];
     let num_cols = first_row.len();
-    let num_pop_header_cells = num_cols;
-    let add_custom_headers = num_pop_header_cells >= num_cells && field_mode.keep_headers();
+    let keep_headers = field_mode.keep_headers();
     for h_row in first_row.to_owned() {
         let sn = h_row.to_snake_case();
         if let Some(col) = columns.get(h_index) {
             headers.push(col.key.to_string());
         } else {
-            if add_custom_headers && sn.len() > 0 {
+            if keep_headers && sn.len() > 0 {
                 headers.push(sn);
             } else {
                 headers.push(to_head_key(h_index, field_mode, num_cols));
