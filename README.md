@@ -47,7 +47,7 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
-- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here `serde_json::Value`. More details to come.
+- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as a serde_json::Value`. More details to come.
 
 Simple example:
 ```rust 
