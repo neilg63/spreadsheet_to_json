@@ -6,6 +6,8 @@
 
 ## Convert Spreadsheets and CSV files to jSON
 
+### NB: THis is still in alpha!!!
+
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
 It relies on the [Calamine](https://crates.io/crates/calamine) and [CSV](https://crates.io/crates/csv) library crates to process files, the [tokio](https://crates.io/crates/tokio) crate for asynchronous operations and naturally [serde](https://crates.io/crates/serde) and [serde_json](https://crates.io/crates/serde_json) serialization libraries.
@@ -45,6 +47,7 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
+- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here `serde_json::Value`. More details to come.
 
 Simple example:
 ```rust 
@@ -85,7 +88,8 @@ This crate is still alpha and likely to undergo breaking changes as it's part of
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
 - **0.1.4** Added support for Excel Binary format (.xlsb)
-- **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_direct()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function, you should use `render_spreadsheet_direct()` instead.
+- **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_direct()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function
+- **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become you should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
 
 ## Examples
 

@@ -1,5 +1,7 @@
 
 use heck::ToSnakeCase;
+use indexmap::IndexMap;
+use serde_json::Value;
 
 use crate::{Column, FieldNameMode};
 
@@ -72,6 +74,24 @@ let mut h_index = 0;
     }
     headers
 }
+
+
+/// check if the row is not a header row. Always return true if row_index is greater than 0
+pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: usize, headers: &[String]) -> bool {
+  if row_index > 0 {
+      return true;
+  }
+  let mut is_header = true;
+  for (_key, value) in row_map.iter() {
+    let ref_key = value.to_string().to_snake_case();
+    if !headers.contains(&ref_key) {
+      is_header = false;
+      break;
+    }
+  }
+  is_header
+}
+
 
 #[cfg(test)]
 mod tests {

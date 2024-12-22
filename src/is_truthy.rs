@@ -109,21 +109,28 @@ impl TruthyOption {
 /// case_sensitive and starts_with are applied globally
 #[allow(dead_code)]
 pub fn split_truthy_custom_option_str(custom_str: &str, case_sensitive: bool, starts_with: bool) -> Vec<TruthyOption> {
-  let parts = custom_str.to_segments(",");
-  let mut matchers:Vec<TruthyOption> = vec![];
-  if parts.len() > 2 {
-    if let Some(first) = parts.get(0) {
-      if first.starts_with_ci_alphanum("tru") {
-        let yes_parts = parts.get(1).unwrap_or(&"".to_string()).to_segments("|");
-        let no_parts = parts.get(2).unwrap_or(&"".to_string()).to_segments("|");
-        for match_str in yes_parts {
-          matchers.push(TruthyOption::new(true, &match_str, case_sensitive, starts_with));
-        }
-        for match_str in no_parts {
-          matchers.push(TruthyOption::new(false, &match_str, case_sensitive, starts_with));
-        }
-      }
+  let (head, tail) = custom_str.to_head_tail(":");
+  let (first, second) = tail.to_head_tail(",");
+  if first.len() > 0 {
+    if head.starts_with_ci_alphanum("tr") {
+      return to_truth_options(&first, &second, case_sensitive, starts_with)
     }
+  }
+  vec![]
+}
+
+
+/// split a comma-separated string of true and false options into a list of TruthyOptions
+/// alternative true or false options may be split by | (pipe) characters
+pub fn to_truth_options(true_str: &str, false_str: &str, case_sensitive: bool, starts_with: bool) -> Vec<TruthyOption> {
+  let mut matchers:Vec<TruthyOption> = vec![];
+  let true_parts = true_str.to_segments("|");
+  let false_parts = false_str.to_segments("|");
+  for match_str in true_parts {
+    matchers.push(TruthyOption::new(true, &match_str, case_sensitive, starts_with));
+  }
+  for match_str in false_parts {
+    matchers.push(TruthyOption::new(false, &match_str, case_sensitive, starts_with));
   }
   matchers
 }
@@ -161,7 +168,7 @@ mod tests {
   #[test]
   fn test_truthy_custom() {
 
-    let custom_setting_str = "truthy,si|vero,no|falso";
+    let custom_setting_str = "truthy:si|vero,no|falso";
     let custom_flags = split_truthy_custom_option_str(custom_setting_str, false, false);
 
     // yes will be neither true nor false, because we're using custom true/false flags

@@ -1,6 +1,6 @@
 use heck::ToSnakeCase;
 use serde_json::{json, Error, Value};
-use simple_string_patterns::SimpleMatch;
+use simple_string_patterns::{SimpleMatch, ToSegments};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
 /// default max number of rows without an override via ->max_row_count(max_row_count)
@@ -135,6 +135,52 @@ impl OptionSet {
     let mut index = 0;
     for ck in keys {
         columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
+        index += 1;
+    }
+    self.rows = RowOptionSet::simple(&columns);
+    self
+  }
+
+  /// Override matched and unmatched columns with custom keys and/or formatting options
+  pub fn override_columns(mut self, cols: &[Value]) -> Self {
+    let mut columns: Vec<Column> = Vec::with_capacity(cols.len());
+    let mut index = 0;
+    for ck in cols {
+        let key = ck.get("key").unwrap().as_str().unwrap();
+        let fmt = match ck.get("format") {
+          Some(fmt_val) => {
+            match Format::from_str(fmt_val.as_str().unwrap()) {
+              Ok(fmt) => fmt,
+              Err(_) => Format::Auto
+            }
+          },
+          None => Format::Auto
+        };
+        let default = match ck.get("default") {
+          Some(def_val) => {
+            match def_val {
+              Value::String(s) => Some(Value::String(s.clone())),
+              Value::Number(n) => Some(Value::Number(n.clone())),
+              Value::Bool(b) => Some(Value::Bool(b.clone())),
+              _ => None
+            }
+          },
+          None => None
+        };
+        let date_only = match ck.get("date_only") {
+          Some(date_val) => date_val.as_bool().unwrap_or(false),
+          None => false
+        };
+        let dec_commas_keys = ["euro_number_format", "decimal_comma"];
+        let mut euro_number_format = false;
+
+        for key in &dec_commas_keys {
+            if let Some(euro_val) = ck.get(*key) {
+                euro_number_format = euro_val.as_bool().unwrap_or(false);
+                break;
+            }
+        }
+        columns.push(Column::from_key_ref_with_format(Some(key), index,fmt, default, date_only, euro_number_format));
         index += 1;
     }
     self.rows = RowOptionSet::simple(&columns);
@@ -306,6 +352,8 @@ impl FromStr for Format {
         _ => {
           if let Some(str) = match_custom_dt(key) {
             Self::DateTimeCustom(Arc::from(str))
+          } else if let Some((yes, no)) = match_custom_truthy(key) {
+            Self::TruthyCustom(Arc::from(yes), Arc::from(no))
           } else {
             Self::Auto
           }
@@ -322,6 +370,18 @@ fn match_custom_dt(key: &str) -> Option<String> {
   } else {
     None
   }
+}
+
+fn match_custom_truthy(key: &str) -> Option<(String,String)> {
+  let test_str = key.trim();
+  let (head, tail) = test_str.to_head_tail(":");
+  if tail.len() > 1 && head.len() > 1 && head.starts_with_ci("tr") {
+    let (yes, no) = tail.to_head_tail(",");
+    if yes.len() > 0 && no.len() > 0 {
+      return Some((yes, no));
+    }
+  }
+  None
 }
 
 impl Format {

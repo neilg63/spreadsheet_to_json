@@ -26,14 +26,22 @@ use crate::error::GenericError;
 /// This is now synchronous and calls the asynchronous function using a runtime.
 pub fn process_spreadsheet_direct(opts: &OptionSet) -> Result<ResultSet, GenericError> {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(render_spreadsheet_core(opts, None, None))
+    rt.block_on(process_spreadsheet_core(opts, None, None))
 }
 
-/// Output the result set with captured rows (up to the maximum allowed) directly.
+/// Output the result set with captured rows (up to the maximum allowed) immediately.
 /// Use this in an async function using the tokio runtime if you direct results
 /// without a save callback
+pub async fn process_spreadsheet_immediate(opts: &OptionSet) -> Result<ResultSet, GenericError> {
+  process_spreadsheet_core(opts, None, None).await
+}
+
+#[deprecated(
+	since = "1.0.6",
+	note = "This function is a wrapper for the renamed function `process_spreadsheet_inline`"
+)]
 pub async fn render_spreadsheet_direct(opts: &OptionSet) -> Result<ResultSet, GenericError> {
-  render_spreadsheet_core(opts, None, None).await
+  process_spreadsheet_core(opts, None, None).await
 }
 
 /// Output the result set with deferred row saving and optional output reference
@@ -42,12 +50,12 @@ pub async fn process_spreadsheet_async(
   save_func: Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
   out_ref: Option<&str>
   ) -> Result<ResultSet, GenericError> {
-  render_spreadsheet_core(opts, Some(save_func), out_ref).await
+  process_spreadsheet_core(opts, Some(save_func), out_ref).await
 }
 
 /// Output the result set with captured rows (up to the maximum allowed) directly.
 /// with optional asynchronous row save method and output reference
-pub async fn render_spreadsheet_core(
+pub async fn process_spreadsheet_core(
     opts: &OptionSet,
     save_opt: Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
     out_ref: Option<&str>
@@ -73,6 +81,19 @@ pub async fn render_spreadsheet_core(
     }
 }
 
+
+#[deprecated(
+    since = "1.0.6",
+    note = "This function is a wrapper for the renamed function `process_spreadsheet_core`"
+)]
+pub async fn render_spreadsheet_core(
+    opts: &OptionSet,
+    save_opt: Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
+    out_ref: Option<&str>
+) -> Result<ResultSet, GenericError> {
+    process_spreadsheet_core(opts, save_opt, out_ref).await
+}
+
 /// Parse spreadsheets with an optional callback method to save rows asynchronously and an optional output reference
 /// that may be a file name or database identifier
 pub async fn read_workbook_core<'a>(
@@ -88,6 +109,7 @@ pub async fn read_workbook_core<'a>(
         if let Some(first_sheet_name) = sheet_name_opt {
             let range = workbook.worksheet_range(&first_sheet_name.clone())?;
             let mut headers: Vec<String> = vec![];
+						let mut col_keys: Vec<String> = vec![];
             let mut has_headers = false;
             let capture_headers = !opts.omit_header;
             let source_rows = range.rows();
@@ -99,6 +121,7 @@ pub async fn read_workbook_core<'a>(
             if let Some(first_row) = range.headers() {
                 headers = build_header_keys(&first_row, &columns, &opts.field_mode);
                 has_headers = !match_header_row_below;
+								col_keys = first_row;
             }
             let total = source_rows.clone().count();
             if capture_rows || match_header_row_below {
@@ -119,7 +142,9 @@ pub async fn read_workbook_core<'a>(
                     } else if (has_headers || !capture_headers) && capture_rows {
                         // only capture rows if headers are either omitted or have already been captured
                         let row_map = workbook_row_to_map(row, &opts.rows, &headers);
-                        rows.push(row_map);
+												if is_not_header_row(&row_map, row_index,&col_keys) {
+													rows.push(row_map);
+												}
                     }
                     row_index += 1;
                 }
@@ -127,21 +152,31 @@ pub async fn read_workbook_core<'a>(
             if let Some(save_method) = save_opt {
                 let (tx, mut rx) = mpsc::channel(32);
                 let opts = Arc::new(opts.clone()); // Clone opts if possible, or wrap in Arc
-                let headers = headers.clone();     // Clone headers since it's used in the task
+                let headers = headers.clone();  
+								let col_keys = col_keys.clone();   // Clone headers since it's used in the task
                 let first_sheet_name_clone = first_sheet_name.clone();
                 tokio::spawn(async move {
-                    if let Ok(range) = workbook.worksheet_range(&first_sheet_name_clone) {
-                        let source_rows = range.rows();
-                        for row in source_rows {
-                            let row_map = workbook_row_to_map(row, &opts.rows, &headers);
-                            if tx.send(row_map).await.is_err() {
-                                // Channel closed, stop sending
-                                break;
-                            }
+                  if let Ok(range) = workbook.worksheet_range(&first_sheet_name_clone) {
+                    let mut source_rows = range.rows();
+                    if let Some(first_row) = source_rows.next() {
+                      let first_row_map = workbook_row_to_map(&first_row, &opts.rows, &headers);
+                      // Send the first row
+                      if is_not_header_row(&first_row_map, 0, &col_keys) {
+                        if tx.send(first_row_map).await.is_err() {
+                          return;  // Early exit if the channel is closed
+                        }
+                      }
+                    }
+            
+                    // Process the rest of the rows
+                    for row in source_rows {
+                        let row_map = workbook_row_to_map(&row, &opts.rows, &headers);
+                        if tx.send(row_map).await.is_err() {
+                            break;  // Channel closed, stop sending
                         }
                     }
+                  }
                 });
-
                 // Process the rows as they come in
                 while let Some(row) = rx.recv().await {
                     save_method(row)?;
