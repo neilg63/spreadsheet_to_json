@@ -633,7 +633,7 @@ impl FieldNameMode {
         FieldNameMode::AutoNumPadded
       }
     } else {
-      FieldNameMode::A1
+      FieldNameMode::AutoA1
     }
   }
 
