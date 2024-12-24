@@ -90,8 +90,6 @@ impl ResultSet {
   }
 
   pub fn from_multiple(sheets: &[SheetDataSet], info: &WorkbookInfo) -> Self {
-    
-    
     let selected = None;
     let mut sheet_names = vec![];
     let filename = info.filename.clone();
@@ -120,6 +118,13 @@ impl ResultSet {
   }
 
 
+  pub fn multimode(&self) -> bool {
+    match self.data {
+      SpreadData::Multiple(_) => true,
+      _ => false
+    }
+  }
+
   /// Full result set as JSON with criteria, options and data in synchronous mode
   pub fn to_json(&self) -> Value {
     let mut result = json!({
@@ -139,20 +144,32 @@ impl ResultSet {
 
    /// Full result set as CLI-friendly lines
    pub fn to_output_lines(&self, json_lines: bool) -> Vec<String> {
+    let selected_names = self.selected.clone().unwrap_or(vec![]);
+    let num_selected = selected_names.len();
+    let plural = if num_selected > 1 {
+      "s"
+    } else {
+      ""
+    };
     let mut lines = vec![
       format!("name:{}", self.filename),
       format!("extension: {}", self.extension),
-      format!("sheet: name: {}", self.selected.clone().unwrap_or(vec![]).join(", ")),
+      
       format!("sheets: {}", self.sheets.join(", ")),
-      format!("row count: {}", self.num_rows),
-      format!("fields: {}", self.keys.join(",")),
     ];
+    if num_selected > 0 {
+      lines.push(format!("selected sheet{}: {}", plural, selected_names.join(", ")));
+    }
+    lines.push(format!("row count: {}", self.num_rows));
+    lines.push(format!("fields: {}", self.keys.join(",")));
     if let Some(out_ref_str) = self.out_ref.clone() {
       lines.push(format!("output reference: {}", out_ref_str));
     } else {
-      lines.push("data:".to_owned());
+      let has_many_sheets = self.sheets.len() > 1;
+      if !has_many_sheets || !self.multimode() {
+        lines.push("data:".to_owned());
+      }
       if json_lines {
-        let has_many_sheets = self.sheets.len() > 1;
         for sheet in &self.data.sheets() {
           if has_many_sheets {
             lines.push(format!("Sheet `{}` ({}):", sheet.name(), sheet.num_rows));
@@ -162,7 +179,14 @@ impl ResultSet {
           }
         }
       } else {
-        lines.push(format!("{}", self.data.to_json()));
+        if self.multimode() {
+          for sheet in self.data.sheets() {
+            lines.push(format!("Sheet `{}` ({}):", sheet.name(), sheet.num_rows));
+            lines.push(format!("{}", json!(sheet)));
+          }
+        } else {
+          lines.push(format!("{}", self.data.to_json()));
+        }
       }
     }
     lines
@@ -175,7 +199,7 @@ impl ResultSet {
   }
   
   /// JSON object of row arrays only
-  pub fn json_rows(&self) -> Value {
+  pub fn json_data(&self) -> Value {
     json!(self.data)
   }
 

@@ -81,7 +81,7 @@ If the file name and extension cannot be matched, because the file is unavailabl
 - `to_json()`: Converts to the result set to `serde_json::Value` that may be printed directly or written to a file.
 - `to_output_lines(json_lines: bool)`: Returns a vector of plain-text results with each data row as JSON on a new line
 - `rows()`: Returns a vector of rendered JSON strings
-- `json_rows(json_lines: bool)`: Returns all data rows as `serde_json::Value::Array` ready for conversion
+- `json_data()`: Returns all data as as `serde_json::Value::Array` ready for conversion
 
 ## Alpha Version History
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
