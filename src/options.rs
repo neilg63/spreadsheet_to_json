@@ -739,8 +739,8 @@ impl ToString for FieldNameMode {
     match self {
       Self::AutoNumPadded => "C01 auto",
       Self::NumPadded => "C01 override",
-      Self::A1 => "A! override",
-      _ => "A! auto",
+      Self::A1 => "A1 override",
+      _ => "A1 auto",
     }.to_string()    
   }
 }
