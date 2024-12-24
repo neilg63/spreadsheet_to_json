@@ -2,8 +2,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
-
-use calamine::Sheet;
 use calamine::Sheets;
 use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
@@ -107,75 +105,88 @@ pub async fn read_workbook_core<'a>(
     out_ref: Option<&str>
 ) -> Result<ResultSet, GenericError> {
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
-      
-      let max_rows = opts.max_rows();
-      let (selected_names, sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, opts);
-      
-      let columns = opts.rows.columns.clone();
-
-      if selected_names.len() > 0 {
-        let info = WorkbookInfo::new(path_data, &selected_names, &sheet_names);
+        let max_rows = opts.max_rows();
+        let (selected_names, sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, opts);
         
-        if opts.multimode() {
-          let mut sheet_datasets: Vec<(String, Vec<IndexMap<String, Value>>, usize)> = vec![];
-          let capture_rows = opts.capture_rows();
-          for (sheet_index, sheet_ref) in sheet_names.iter().enumerate() {
-            let range = workbook.worksheet_range(&sheet_ref.clone())?;
-            let mut headers: Vec<String> = vec![];
-						let mut col_keys: Vec<String> = vec![];
-            let mut has_headers = false;
-            let capture_headers = !opts.omit_header;
-            let source_rows = range.rows();
-            let mut rows: Vec<IndexMap<String, Value>> = vec![];
-            let mut row_index = 0;
-            let header_row_index = opts.header_row_index();
-            let match_header_row_below = capture_headers && header_row_index > 0;
-            
-            if let Some(first_row) = range.headers() {
-                headers = build_header_keys(&first_row, &columns, &opts.field_mode);
-                has_headers = !match_header_row_below;
-								col_keys = first_row;
-            }
-            let total = source_rows.clone().count();
-            if capture_rows || match_header_row_below {
-                let max_row_count = if capture_rows {
-                    max_rows
-                } else {
-                    header_row_index + 2
-                };
 
-                for row in source_rows.clone().take(max_row_count).collect::<Vec<&[Data]>>() {
-                    if row_index >= max_row_count {
-                        break;
-                    }
-                    if match_header_row_below && (row_index + 1) == header_row_index {
-                        let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
-                        headers = build_header_keys(&h_row, &columns, &opts.field_mode);
-                        has_headers = true;
-                    } else if (has_headers || !capture_headers) && capture_rows {
-                        // only capture rows if headers are either omitted or have already been captured
-                        let row_map = workbook_row_to_map(row, &opts.rows, &headers);
-												if is_not_header_row(&row_map, row_index,&col_keys) {
-													rows.push(row_map);
-												}
-                    }
-                    row_index += 1;
-                }
+        if selected_names.len() > 0 {
+            let info = WorkbookInfo::new(path_data, &selected_names, &sheet_names);
+
+            if opts.multimode() {
+                read_multiple_worksheets(&mut workbook, &sheet_names, opts, &info, max_rows).await
+            } else {
+                let sheet_ref = &selected_names[0];
+                read_single_worksheet(workbook, sheet_ref, opts, &info, save_opt, out_ref).await
             }
-            sheet_datasets.push((sheet_ref.clone(), rows, total));
-            
-          }
-          Ok(ResultSet::from_multiple(&sheet_datasets, &info))
         } else {
-          let sheet_ref = &selected_names[0];
-          read_single_worksheet(workbook, sheet_ref, opts, &info, save_opt, out_ref).await
-        }
-        } else {
-          Err(GenericError("workbook_with_no_sheets"))
+            Err(GenericError("workbook_with_no_sheets"))
         }
     } else {
         Err(GenericError("cannot_open_workbook"))
     }
+}
+
+async fn read_multiple_worksheets(
+    workbook: &mut Sheets<BufReader<File>>,
+    sheet_names: &[String],
+    opts: &OptionSet,
+    info: &WorkbookInfo,
+    max_rows: usize
+) -> Result<ResultSet, GenericError> {
+    let mut sheet_datasets: Vec<(String, Vec<IndexMap<String, Value>>, usize)> = vec![];
+    let mut sheet_index: usize = 0;
+    let capture_rows = opts.capture_rows();
+    for sheet_ref in sheet_names {
+      let range = workbook.worksheet_range(&sheet_ref.clone())?;
+      let mut headers: Vec<String> = vec![];
+      let mut col_keys: Vec<String> = vec![];
+      let mut has_headers = false;
+      let capture_headers = !opts.omit_header;
+      let source_rows = range.rows();
+      let mut rows: Vec<IndexMap<String, Value>> = vec![];
+      let mut row_index = 0;
+      let header_row_index = opts.header_row_index();
+      let columns = if sheet_index == 0 {
+        opts.rows.columns.clone()
+      } else {
+        vec![]
+      };
+      let match_header_row_below = capture_headers && header_row_index > 0;
+      if let Some(first_row) = range.headers() {
+        
+        headers = build_header_keys(&first_row, &columns, &opts.field_mode);
+        has_headers = !match_header_row_below;
+        col_keys = first_row;
+      }
+      let total = source_rows.clone().count();
+      if capture_rows || match_header_row_below {
+          let max_row_count = if capture_rows {
+              max_rows
+          } else {
+              header_row_index + 2
+          };
+
+          for row in source_rows.clone().take(max_row_count).collect::<Vec<&[Data]>>() {
+              if row_index >= max_row_count {
+                  break;
+              }
+              if match_header_row_below && (row_index + 1) == header_row_index {
+                  let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
+                  headers = build_header_keys(&h_row, &columns, &opts.field_mode);
+                  has_headers = true;
+              } else if (has_headers || !capture_headers) && capture_rows {
+                  let row_map = workbook_row_to_map(row, &opts.rows, &headers);
+                  if is_not_header_row(&row_map, row_index, &col_keys) {
+                      rows.push(row_map);
+                  }
+              }
+              row_index += 1;
+          }
+      }
+      sheet_datasets.push((sheet_ref.clone(), rows, total));
+      sheet_index += 1;
+    }
+    Ok(ResultSet::from_multiple(&sheet_datasets, &info))
 }
 
 pub async fn read_single_worksheet(
