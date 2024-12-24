@@ -1,6 +1,10 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use calamine::Sheet;
+use calamine::Sheets;
 use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
 use tokio::sync::mpsc;
@@ -97,17 +101,26 @@ pub async fn render_spreadsheet_core(
 /// Parse spreadsheets with an optional callback method to save rows asynchronously and an optional output reference
 /// that may be a file name or database identifier
 pub async fn read_workbook_core<'a>(
-    path_data: &PathData<'a>, opts: &OptionSet,
+    path_data: &PathData<'a>,
+    opts: &OptionSet,
     save_opt: Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
     out_ref: Option<&str>
 ) -> Result<ResultSet, GenericError> {
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
-        let columns = opts.rows.columns.clone();
-        let max_rows = opts.max_rows();
-        let (sheet_name_opt, sheet_names, sheet_index) = match_sheet_name_and_index(&mut workbook, opts);
-        let capture_rows = opts.capture_rows();
-        if let Some(first_sheet_name) = sheet_name_opt {
-            let range = workbook.worksheet_range(&first_sheet_name.clone())?;
+      
+      let max_rows = opts.max_rows();
+      let (selected_names, sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, opts);
+      
+      let columns = opts.rows.columns.clone();
+
+      if selected_names.len() > 0 {
+        let info = WorkbookInfo::new(path_data, &selected_names, &sheet_names);
+        
+        if opts.multimode() {
+          let mut sheet_datasets: Vec<(String, Vec<IndexMap<String, Value>>, usize)> = vec![];
+          let capture_rows = opts.capture_rows();
+          for (sheet_index, sheet_ref) in sheet_names.iter().enumerate() {
+            let range = workbook.worksheet_range(&sheet_ref.clone())?;
             let mut headers: Vec<String> = vec![];
 						let mut col_keys: Vec<String> = vec![];
             let mut has_headers = false;
@@ -117,7 +130,7 @@ pub async fn read_workbook_core<'a>(
             let mut row_index = 0;
             let header_row_index = opts.header_row_index();
             let match_header_row_below = capture_headers && header_row_index > 0;
-
+            
             if let Some(first_row) = range.headers() {
                 headers = build_header_keys(&first_row, &columns, &opts.field_mode);
                 has_headers = !match_header_row_below;
@@ -149,48 +162,111 @@ pub async fn read_workbook_core<'a>(
                     row_index += 1;
                 }
             }
-            if let Some(save_method) = save_opt {
-                let (tx, mut rx) = mpsc::channel(32);
-                let opts = Arc::new(opts.clone()); // Clone opts if possible, or wrap in Arc
-                let headers = headers.clone();  
-								let col_keys = col_keys.clone();   // Clone headers since it's used in the task
-                let first_sheet_name_clone = first_sheet_name.clone();
-                tokio::spawn(async move {
-                  if let Ok(range) = workbook.worksheet_range(&first_sheet_name_clone) {
-                    let mut source_rows = range.rows();
-                    if let Some(first_row) = source_rows.next() {
-                      let first_row_map = workbook_row_to_map(&first_row, &opts.rows, &headers);
-                      // Send the first row
-                      if is_not_header_row(&first_row_map, 0, &col_keys) {
-                        if tx.send(first_row_map).await.is_err() {
-                          return;  // Early exit if the channel is closed
-                        }
-                      }
-                    }
+            sheet_datasets.push((sheet_ref.clone(), rows, total));
             
-                    // Process the rest of the rows
-                    for row in source_rows {
-                        let row_map = workbook_row_to_map(&row, &opts.rows, &headers);
-                        if tx.send(row_map).await.is_err() {
-                            break;  // Channel closed, stop sending
-                        }
-                    }
-                  }
-                });
-                // Process the rows as they come in
-                while let Some(row) = rx.recv().await {
-                    save_method(row)?;
-                }
-            }
-            let info = WorkbookInfo::new(path_data, &first_sheet_name, sheet_index, &sheet_names);
-            let ds = DataSet::from_count_and_rows(total, rows, opts);
-            Ok(ResultSet::new(info, &headers, ds, out_ref))
+          }
+          Ok(ResultSet::from_multiple(&sheet_datasets, &info))
         } else {
-            Err(GenericError("workbook_with_no_sheets"))
+          let sheet_ref = &selected_names[0];
+          read_single_worksheet(workbook, sheet_ref, opts, &info, save_opt, out_ref).await
+        }
+        } else {
+          Err(GenericError("workbook_with_no_sheets"))
         }
     } else {
         Err(GenericError("cannot_open_workbook"))
     }
+}
+
+pub async fn read_single_worksheet(
+  mut workbook: Sheets<BufReader<File>>,
+  sheet_ref: &str,
+  opts: &OptionSet,
+  info: &WorkbookInfo,
+  save_opt: Option<Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>>,
+  out_ref: Option<&str>,
+) -> Result<ResultSet, GenericError> {
+  let range = workbook.worksheet_range(sheet_ref)?;
+  let capture_rows = opts.capture_rows();
+  let columns = opts.rows.columns.clone();
+  let max_rows = opts.max_rows();
+  let mut headers: Vec<String> = vec![];
+  let mut col_keys: Vec<String> = vec![];
+  let mut has_headers = false;
+  let capture_headers = !opts.omit_header;
+  let source_rows = range.rows();
+  let mut rows: Vec<IndexMap<String, Value>> = vec![];
+  let mut row_index = 0;
+  let header_row_index = opts.header_row_index();
+  let match_header_row_below = capture_headers && header_row_index > 0;
+
+  if let Some(first_row) = range.headers() {
+      headers = build_header_keys(&first_row, &columns, &opts.field_mode);
+      has_headers = !match_header_row_below;
+      col_keys = first_row;
+  }
+  let total = source_rows.clone().count();
+  if capture_rows || match_header_row_below {
+      let max_row_count = if capture_rows {
+          max_rows
+      } else {
+          header_row_index + 2
+      };
+
+      for row in source_rows.clone().take(max_row_count).collect::<Vec<&[Data]>>() {
+          if row_index >= max_row_count {
+              break;
+          }
+          if match_header_row_below && (row_index + 1) == header_row_index {
+              let h_row = row.into_iter().map(|c| c.to_string().to_snake_case()).collect::<Vec<String>>();
+              headers = build_header_keys(&h_row, &columns, &opts.field_mode);
+              has_headers = true;
+          } else if (has_headers || !capture_headers) && capture_rows {
+              // only capture rows if headers are either omitted or have already been captured
+              let row_map = workbook_row_to_map(row, &opts.rows, &headers);
+              if is_not_header_row(&row_map, row_index,&col_keys) {
+                rows.push(row_map);
+              }
+          }
+          row_index += 1;
+      }
+  }
+  if let Some(save_method) = save_opt {
+      let (tx, mut rx) = mpsc::channel(32);
+      let opts = Arc::new(opts.clone()); // Clone opts if possible, or wrap in Arc
+      let headers = headers.clone();  
+      let col_keys = col_keys.clone();   // Clone headers since it's used in the task
+      let sheet_name = sheet_ref.to_string().clone();
+      tokio::spawn(async move {
+        if let Ok(range) = workbook.worksheet_range(&sheet_name) {
+          let mut source_rows = range.rows();
+          if let Some(first_row) = source_rows.next() {
+            let first_row_map = workbook_row_to_map(&first_row, &opts.rows, &headers);
+            // Send the first row
+            if is_not_header_row(&first_row_map, 0, &col_keys) {
+              if tx.send(first_row_map).await.is_err() {
+                return;  // Early exit if the channel is closed
+              }
+            }
+          }
+  
+          // Process the rest of the rows
+          for row in source_rows {
+              let row_map = workbook_row_to_map(&row, &opts.rows, &headers);
+              if tx.send(row_map).await.is_err() {
+                  break;  // Channel closed, stop sending
+              }
+          }
+        }
+      });
+      // Process the rows as they come in
+      while let Some(row) = rx.recv().await {
+          save_method(row)?;
+      }
+  }
+  
+  let ds = DataSet::from_count_and_rows(total, rows, opts);
+  Ok(ResultSet::new(info, &headers, ds, out_ref))
 }
 
 /// Process a CSV/TSV file asynchronously with an optional row save method 
@@ -264,7 +340,7 @@ pub async fn read_csv_core<'a>(
         }
         let info = WorkbookInfo::simple(path_data);
         let ds = DataSet::from_count_and_rows(total, rows, opts);
-        Ok(ResultSet::new(info, &headers, ds, out_ref))
+        Ok(ResultSet::new(&info, &headers, ds, out_ref))
     } else {
         let error_msg = match path_data.ext() {
             Extension::Tsv => "unreadable_tsv_file",

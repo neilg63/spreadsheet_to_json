@@ -58,8 +58,8 @@ impl RowOptionSet {
 /// Core options with nested row options
 #[derive(Debug, Clone, Default)]
 pub struct OptionSet {
-  pub sheet: Option<String>, // Optional sheet name reference. Will default to index value if not matched
-  pub index: u32, // worksheet index
+  pub selected: Option<Vec<String>>, // Optional sheet name reference. Will default to index value if not matched
+  pub indices: Vec<u32>, // worksheet index
   pub path: Option<String>, // path argument. If None, do not attempt to parse
   pub rows: RowOptionSet,
   pub jsonl: bool,
@@ -74,8 +74,8 @@ impl OptionSet {
   /// Instantiates a new option set with a path string for file operations.
   pub fn new(path_str: &str) -> Self {
     OptionSet {
-        sheet: None,
-        index: 0,
+        selected: None,
+        indices: vec![0],
         path: Some(path_str.to_string()),
         rows: RowOptionSet::default(),
         jsonl: false,
@@ -88,16 +88,28 @@ impl OptionSet {
   }
 
   /// Sets the sheet name for the operation.
-  pub fn sheet_name(mut self, name: String) -> Self {
-    self.sheet = Some(name);
+  pub fn sheet_name(mut self, name: &str) -> Self {
+    self.selected = Some(vec![name.to_string()]);
+    self
+  }
+
+  /// Sets the sheet name for the operation.
+  pub fn sheet_names(mut self, names: &[String]) -> Self {
+    self.selected = Some(names.to_vec());
     self
   }
 
   /// Sets the sheet index.
   pub fn sheet_index(mut self, index: u32) -> Self {
-      self.index = index;
+      self.indices = vec![index];
       self
   }
+
+  /// Sets the sheet index.
+  pub fn sheet_indices(mut self, indices: &[u32]) -> Self {
+    self.indices = indices.to_vec();
+    self
+}
 
   /// Sets JSON Lines mode to true.
   pub fn json_lines(mut self) -> Self {
@@ -127,6 +139,10 @@ impl OptionSet {
   pub fn read_mode_async(mut self) -> Self {
       self.read_mode = ReadMode::Async;
       self
+  }
+
+  pub fn multimode(&self) -> bool {
+    self.read_mode.is_multimode()
   }
 
   /// Override matched and unmatched headers with custom headers.
@@ -210,11 +226,19 @@ impl OptionSet {
   }
 
   pub fn to_json(&self) -> Value {
+    let selected = if self.multimode() {
+      json!({
+        "sheets": self.selected.clone().unwrap_or(vec![]),
+        "indices": self.indices.clone()
+      })
+    } else {
+      json!({
+        "sheet": self.selected.clone().unwrap_or(vec![]),
+        "index": self.indices.get(0).unwrap_or(&0)
+      })
+    };
     json!({
-      "sheet": {
-        "key": self.sheet.clone().unwrap_or("".to_string()),
-        "index": self.index,
-      },
+      "selected": selected,
       "path": self.path.clone().unwrap_or("".to_string()),
       "decimal_separator": self.rows.decimal_separator(),
       "date_only": self.rows.date_only,
@@ -226,12 +250,21 @@ impl OptionSet {
     })
   }
 
+  pub fn index_list(&self) -> String {
+    self.indices.clone().into_iter().map(|s| s.to_string()).collect::<Vec<String>>().join(", ")
+  }
+
   pub fn to_lines(&self) -> Vec<String> {
     let mut lines = vec![];
-    if let Some(s_name) = self.sheet.clone() {
-      lines.push(format!("sheet name: {}", s_name));
-    } else if self.index > 0 {
-      lines.push(format!("sheet index: {}", self.index));
+    if let Some(s_names) = self.selected.clone() {
+      let plural = if s_names.len() > 1 {
+        "s"
+      } else {
+        ""
+      };
+      lines.push(format!("sheet name{}: {}", plural, s_names.join(",")));
+    } else if self.indices.len() > 0 {
+      lines.push(format!("sheet indices: {}", self.index_list()));
     }
     if let Some(path) = self.path.clone() {
       lines.push(format!("path: {}", path));
@@ -262,8 +295,8 @@ impl OptionSet {
 
   /// set the maximum of rows to be output synchronously
   pub fn max_rows(&self) -> usize {
-    if self.read_mode == ReadMode::PreviewAsync {
-      return 20;
+    if self.read_mode == ReadMode::PreviewMultiple {
+      return 100;
     }
     if let Some(mr) = self.max {
       mr as usize
@@ -583,7 +616,7 @@ impl<'a> PathData<'a> {
 pub enum ReadMode {
   #[default]
   Sync,
-  PreviewAsync,
+  PreviewMultiple,
   Async
 }
 
@@ -591,15 +624,15 @@ pub enum ReadMode {
 impl ReadMode {
   pub fn is_async(&self) -> bool {
     match self {
-      Self::Sync => false,
-      _ => true
+      Self::Async => true,
+      _ => false
     }
   }
 
   /// not preview or sync mode
-  pub fn is_full_async(&self) -> bool {
+  pub fn is_multimode(&self) -> bool {
     match self {
-      Self::Async => true,
+      Self::PreviewMultiple => true,
       _ => false
     }
   }
