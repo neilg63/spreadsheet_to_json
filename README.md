@@ -44,10 +44,9 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
 - `.read_mode_async()` Defer processing of rows with a callback in the second argument in render_spreadsheet_async() 
 - `.json_lines()` Output will be rendered one json object per row.
-
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
-- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as a serde_json::Value`. More details to come.
+- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as a serde_json::Value`. More details to come soon.
 
 Simple example:
 ```rust 
@@ -81,15 +80,16 @@ If the file name and extension cannot be matched, because the file is unavailabl
 - `to_json()`: Converts to the result set to `serde_json::Value` that may be printed directly or written to a file.
 - `to_output_lines(json_lines: bool)`: Returns a vector of plain-text results with each data row as JSON on a new line
 - `rows()`: Returns a vector of rendered JSON strings
-- `json_data()`: Returns all data as as `serde_json::Value::Array` ready for conversion
+- `json_data()`: Returns all data as as `serde_json::Value::Array` ready for conversion or post-processing.
 
 ## Alpha Version History
 This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
-- **0.1.4** Added support for Excel Binary format (.xlsb)
+- **0.1.4** Added support for the Excel Binary format (.xlsb)
 - **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_direct()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function
 - **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become you should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
+- **0.1.7** Added support for multiple worksheets in preview mode and refined output options
 
 ## Examples
 
@@ -102,44 +102,70 @@ This function processes the spreadsheet file immediately.
 ```rust
 use spreadsheet_to_json::*;
 
-fn main() -> Result((), Error) {
-  let opts = Opts::new("path/to/spreadsheet.xlsx")->set_sheet_index(1);
+fn main() -> Result<(), GenericError> {
+  let opts = OptionSet::new("path/to/spreadsheet.xlsx").sheet_index(1);
   let result = process_spreadsheet_direct(&opts);
   let json_value = match result {
-    Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
+    Err(msg_code) => json!({ "error": true, "key": msg_code.to_string() }),
     Ok(data_set) => data_set.to_json() // full result set
   };
   println!("{}", json_value);
+  Ok(())
 }
 ```
 
+### Preview multiple worksheets
+
+You may preview all worksheets and limit the number of sample rows from each sheet.
+```rust
+use spreadsheet_to_json::*;
+
+fn main() -> Result<(), GenericError> {
+  // set the read mode to PreviewMultiple and limit output to the first 10 data rows
+  let opts = OptionSet::new("path/to/spreadsheet-with-2-worksheets.xlsx")
+    .read_mode_preview()
+    .max_row_count(10)
+    .json_lines();
+
+  let result = process_spreadsheet_direct(&opts);
+  // output each line
+  for line in result.to_output_lines() {
+    println!("{}", line);
+  }
+  Ok(())
+}
+```
 
 ### Asynchronous parsing saving to a database
 
-This must be called in an async function and save rows in separate proc
+This must be called in an async function with a callback to save rows in separate processes.
+
 ```rust
 use spreadsheet_to_json::*;
-use spreadsheet_to_json::tokio;
+use tokio;
+use indexmap::IndexMap;
+use serde_json::Value;
 
-#[tokio:main]
-async fn main() -> Result((), GenericError) {
-  let opts = Opts::new("path/to/spreadsheet.xlsx")->read_mode_async();
-  let dataset_id = db_dataset_id(&opts);
+#[tokio::main]
+async fn main() -> Result<(), GenericError> {
+  let opts = OptionSet::new("path/to/spreadsheet.xlsx").read_mode_async();
 
-  let callback = move |row: IndexMap<String, Value>| -> Result<(), Error> {
+  let callback = move |row: IndexMap<String, Value>| -> Result<(), GenericError> {
     save_data_row(row, &connection, dataset_id)
   };
 
-  let result = process_spreadsheet_async(&opts, callback, Some(dataset_id)).await;
+  let result = process_spreadsheet_async(&opts, Box::new(callback), None).await;
+  // A successful result set will have an output reference rather than the actual data
   let result_set = match result {
-      Err(msg_code) => json!{ { "error": true, "key": msg_code.to_string() },
-      Ok(data_set) => data_set.to_json() // full result set
+      Err(msg_code) => json!({ "error": true, "key": msg_code.to_string() }),
+      Ok(data_set) => data_set.to_json() 
   };
   println!("{}", result_set);
+  Ok(())
 }
 
 // Save function called in a closure for each row with a database connection and data_id from the outer scope
-fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id: u32) -> Result((), GenericError) {
+fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_id: u32) -> Result<(), GenericError> {
     let mut row_struct = CustomTableStruct {
     id: None,
     data_id: data_id, // or whatever ID setting logic you have
@@ -168,8 +194,44 @@ fn save_data_row(row: IndexMap<String, Value>, connection: PgConnection, data_id
   }
   diesel::insert_into("data_rows")
   .values(&row_struct)
-  .execute(connection),map_error(|_| GenericError("database_error"));
-  Ok()
+  .execute(connection)
+  .map_err(|_| GenericError("database_error"))?;
+  Ok(())
+}
+
+// Save function called in a closure for each row with a database connection and data_id from the outer scope
+fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_id: u32) -> Result<(), GenericError> {
+    let mut row_struct = CustomTableStruct {
+    id: None,
+    data_id: data_id, // or whatever ID setting logic you have
+    field1: None,
+    field2: None,
+    // ... set other fields to None or default values
+  };
+  
+  for (key, value) in row {
+    match key.as_str() {
+        "field1" => {
+            if let Value::String(s) = value {
+                row_struct.field1 = Some(s.clone());
+            }
+        },
+        "field2" => {
+            if let Value::Number(n) = value {
+                if let Some(i) = n.as_i64() {
+                    row_struct.field2 = Some(i as i32);
+                }
+            }
+        },
+        // Add other field mappings here
+        _ => {} // Ignore unknown keys
+    }
+  }
+  diesel::insert_into("data_rows")
+  .values(&row_struct)
+  .execute(connection)
+  .map_err(|_| GenericError("database_error"))?;
+  Ok(())
 }
 ```
 

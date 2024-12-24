@@ -544,7 +544,9 @@ mod tests {
     // a maximum row count returned of 10 rows
     // and read mode to *preview* to scan all sheets
     // It should correctly calculate
-    let opts = OptionSet::new(sample_path).max_row_count(10).read_mode_preview();
+    let opts = OptionSet::new(sample_path)
+      .max_row_count(10)
+      .read_mode_preview();
 
     let result = process_spreadsheet_direct(&opts);
     
