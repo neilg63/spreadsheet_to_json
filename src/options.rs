@@ -1,6 +1,6 @@
 use heck::ToSnakeCase;
 use serde_json::{json, Error, Value};
-use simple_string_patterns::{SimpleMatch, ToSegments};
+use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
@@ -119,6 +119,12 @@ impl OptionSet {
       self
   }
 
+  /// Sets JSON Lines mode
+  pub fn set_json_lines(mut self, mode: bool) -> Self {
+    self.jsonl = mode;
+    self
+  }
+
   /// Omits the header when reading.
   pub fn omit_header(mut self) -> Self {
       self.omit_header = true;
@@ -138,16 +144,26 @@ impl OptionSet {
   }
 
   /// Sets the read mode to asynchronous, single sheet mode
+  /// This is for reading long files with 10K+ rows in the target sheet
   pub fn read_mode_async(mut self) -> Self {
       self.read_mode = ReadMode::Async;
       self
   }
 
    /// Sets the read mode to direct with multiple sheet output
+   /// This serves to fetch quick a overview of a spreadsheet
    pub fn read_mode_preview(mut self) -> Self {
     self.read_mode = ReadMode::PreviewMultiple;
     self
 }
+
+  /// Sets read mode from a range of common key names
+  /// async, preview or sync (default) with synonyms such as `a`, `p` and `s`
+  /// If the key is unmatched, it will always default to Sync
+  pub fn set_read_mode(mut self, key: &str) -> Self {
+    self.read_mode = ReadMode::from_key(key);
+    self
+  }
 
   pub fn multimode(&self) -> bool {
     self.read_mode.is_multimode()
@@ -630,6 +646,16 @@ pub enum ReadMode {
 
 /// either Preview or Async mode
 impl ReadMode {
+
+  pub fn from_key(key: &str) -> Self {
+    let sample = key.to_lowercase().strip_non_alphanum();
+    match sample.as_str() {
+      "async" | "defer" | "deferred" | "a" => ReadMode::Async,
+      "preview" | "p" | "pre" | "multimode" | "multiple" | "previewmultiple" | "previewmulti" | "m" | "p" => ReadMode::PreviewMultiple,
+      _ => ReadMode::Sync
+    }
+  }
+
   pub fn is_async(&self) -> bool {
     match self {
       Self::Async => true,

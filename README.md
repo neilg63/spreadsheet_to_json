@@ -6,7 +6,7 @@
 
 ## Convert Spreadsheets and CSV files to jSON
 
-### NB: THis is still in alpha!!!
+### NB: THis crate is still in alpha!!!
 
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
@@ -136,7 +136,7 @@ fn main() -> Result<(), GenericError> {
 }
 ```
 
-### Asynchronous parsing saving to a database
+### Asynchronous parsing and saving to a database
 
 This must be called in an async function with a callback to save rows in separate processes.
 

@@ -2,7 +2,7 @@
 name = "spreadsheet-to-json"
 description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as well as CSV and TSV files to JSON or JSONL"
 repository = "https://github.com/neilg63/spreadsheet_to_json"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 categories = ["data-structures", "parsing", "text-processing"]
 license = "GPL-2.0-or-later WITH Bison-exception-2.2"
@@ -17,5 +17,4 @@ serde = { version = "^1.0.216", features = ["derive", "serde_derive"] }
 serde_json = { version = "^1.0.133", features = ["preserve_order"] }
 simple-string-patterns = "^0.3.16"
 tokio = { version = ">=1.42.0, <2.0.0", features = ["full"] }
-
 
