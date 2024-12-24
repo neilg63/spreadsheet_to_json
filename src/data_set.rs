@@ -155,7 +155,7 @@ impl ResultSet {
         let has_many_sheets = self.sheets.len() > 1;
         for sheet in &self.data.sheets() {
           if has_many_sheets {
-            lines.push(format!("Sheet: {} :", sheet.name()));
+            lines.push(format!("Sheet `{}` ({}):", sheet.name(), sheet.num_rows));
           }
           for item in &sheet.rows {
             lines.push(format!("{}", json!(item)));

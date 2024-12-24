@@ -145,6 +145,7 @@ async fn read_multiple_worksheets(
       let mut rows: Vec<IndexMap<String, Value>> = vec![];
       let mut row_index = 0;
       let header_row_index = opts.header_row_index();
+      let mut col_keys: Vec<String> = vec![];
       let columns = if sheet_index == 0 {
         opts.rows.columns.clone()
       } else {
@@ -155,6 +156,7 @@ async fn read_multiple_worksheets(
         
         headers = build_header_keys(&first_row, &columns, &opts.field_mode);
         has_headers = !match_header_row_below;
+        col_keys = first_row;
       }
       let total = source_rows.clone().count();
       if capture_rows || match_header_row_below {
@@ -163,9 +165,13 @@ async fn read_multiple_worksheets(
           } else {
               header_row_index + 2
           };
-
-          for row in source_rows.clone().take(max_row_count).collect::<Vec<&[Data]>>() {
-              if row_index >= max_row_count {
+          let max_take = if total < max_row_count {
+            total
+          } else {
+            max_row_count + 1
+          };
+          for row in source_rows.clone().take(max_take) {
+              if row_index > max_row_count {
                   break;
               }
               if match_header_row_below && (row_index + 1) == header_row_index {
@@ -174,7 +180,7 @@ async fn read_multiple_worksheets(
                   has_headers = true;
               } else if (has_headers || !capture_headers) && capture_rows {
                   let row_map = workbook_row_to_map(row, &opts.rows, &headers);
-                  if is_not_header_row(&row_map, row_index, &headers) {
+                  if is_not_header_row(&row_map, row_index, &col_keys) {
                       rows.push(row_map);
                   }
               }
@@ -221,9 +227,13 @@ pub async fn read_single_worksheet(
       } else {
           header_row_index + 2
       };
-
-      for row in source_rows.clone().take(max_row_count).collect::<Vec<&[Data]>>() {
-          if row_index >= max_row_count {
+      let max_take = if total < max_row_count {
+        total
+      } else {
+        max_row_count + 1
+      };
+      for row in source_rows.clone().take(max_take) {
+          if row_index > max_row_count {
               break;
           }
           if match_header_row_below && (row_index + 1) == header_row_index {
