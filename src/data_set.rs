@@ -129,7 +129,7 @@ impl ResultSet {
       "sheets": self.sheets,
       "num_rows": self.num_rows,
       "fields": self.keys,
-      "data": self.data,
+      "data": self.data.to_json(),
     });
     if let Some(out_ref_str) = self.out_ref.clone() {
       result["outref"] = json!(out_ref_str);
@@ -208,19 +208,26 @@ impl SpreadData {
 
   pub fn first_sheet(&self) -> Vec<IndexMap<String, Value>> {
     match self {
-      SpreadData::Single(sheets) => sheets.to_owned(),
-      SpreadData::Multiple(sheets) => sheets.values().next().unwrap().to_owned()
+      SpreadData::Single(rows) => rows.to_owned(),
+      SpreadData::Multiple(sheet_map) => sheet_map.values().next().unwrap().to_owned()
     }
   }
 
   pub fn all_sheets(&self) -> IndexMap<String, Vec<IndexMap<String, Value>>> {
     match self {
-      SpreadData::Single(sheets) => {
+      SpreadData::Single(rows) => {
         let mut hm = IndexMap::new();
-        hm.insert("single".to_owned(), sheets.to_owned());
+        hm.insert("single".to_owned(), rows.to_owned());
         hm  
       },
-      SpreadData::Multiple(sheets) => sheets.to_owned()
+      SpreadData::Multiple(sheet_map) => sheet_map.to_owned()
+    }
+  }
+
+  pub fn to_json(&self) -> Value {
+    match self {
+      SpreadData::Single(sheet) => json!(sheet),
+      SpreadData::Multiple(sheet_map) => json!(sheet_map)
     }
   }
 }
