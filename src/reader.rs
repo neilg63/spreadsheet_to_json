@@ -106,7 +106,7 @@ pub async fn read_workbook_core<'a>(
 ) -> Result<ResultSet, GenericError> {
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
         let max_rows = opts.max_rows();
-        let (selected_names, sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, opts);
+        let (selected_names, sheet_names, _sheet_indices) = match_sheet_name_and_index(&mut workbook, opts);
         
 
         if selected_names.len() > 0 {
@@ -133,13 +133,12 @@ async fn read_multiple_worksheets(
     info: &WorkbookInfo,
     max_rows: usize
 ) -> Result<ResultSet, GenericError> {
-    let mut sheet_datasets: Vec<(String, Vec<IndexMap<String, Value>>, usize)> = vec![];
+    let mut sheets: Vec<SheetDataSet> = vec![];
     let mut sheet_index: usize = 0;
     let capture_rows = opts.capture_rows();
     for sheet_ref in sheet_names {
       let range = workbook.worksheet_range(&sheet_ref.clone())?;
       let mut headers: Vec<String> = vec![];
-      let mut col_keys: Vec<String> = vec![];
       let mut has_headers = false;
       let capture_headers = !opts.omit_header;
       let source_rows = range.rows();
@@ -156,7 +155,6 @@ async fn read_multiple_worksheets(
         
         headers = build_header_keys(&first_row, &columns, &opts.field_mode);
         has_headers = !match_header_row_below;
-        col_keys = first_row;
       }
       let total = source_rows.clone().count();
       if capture_rows || match_header_row_below {
@@ -176,17 +174,17 @@ async fn read_multiple_worksheets(
                   has_headers = true;
               } else if (has_headers || !capture_headers) && capture_rows {
                   let row_map = workbook_row_to_map(row, &opts.rows, &headers);
-                  if is_not_header_row(&row_map, row_index, &col_keys) {
+                  if is_not_header_row(&row_map, row_index, &headers) {
                       rows.push(row_map);
                   }
               }
               row_index += 1;
           }
       }
-      sheet_datasets.push((sheet_ref.clone(), rows, total));
+      sheets.push(SheetDataSet::new(&sheet_ref, &headers, &rows, total));
       sheet_index += 1;
     }
-    Ok(ResultSet::from_multiple(&sheet_datasets, &info))
+    Ok(ResultSet::from_multiple(&sheets, &info))
 }
 
 pub async fn read_single_worksheet(
@@ -522,10 +520,32 @@ mod tests {
     // (although )the default max is 10,000)
     let opts = OptionSet::new(sample_path).max_row_count(1_000);
 
-    let result = process_spreadsheet_direct(&opts); 
+    let result = process_spreadsheet_direct(&opts);
     
     // The source file should have 1 header row and 400 data rows
     assert_eq!(result.unwrap().num_rows,401);
-}
+  }
+
+  #[test]
+  fn test_multisheet_preview_ods() {
+    let sample_path = "data/sample-data-2.ods";
+
+    // instantiate the OptionSet with a sample path
+    // a maximum row count returned of 10 rows
+    // and read mode to *preview* to scan all sheets
+    // It should correctly calculate
+    let opts = OptionSet::new(sample_path).max_row_count(10).read_mode_preview();
+
+    let result = process_spreadsheet_direct(&opts);
+    
+    // The source spreadsheet should have 2 sheets
+    let dataset = result.unwrap();
+    assert_eq!(dataset.sheets.len(),2);
+    // The source spreadsheet should have 101 + 17 (= 118) populated rows including headers
+    assert_eq!(dataset.num_rows,118);
+
+    // The first sheet's data should only output 10 rows (including the header)
+    assert_eq!(dataset.data.first_sheet().len(), 10);
+  }
 
 }

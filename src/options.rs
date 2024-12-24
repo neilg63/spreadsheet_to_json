@@ -3,8 +3,10 @@ use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, ToSegments};
 use crate::headers::*;
 use std::{path::Path, str::FromStr, sync::Arc};
-/// default max number of rows without an override via ->max_row_count(max_row_count)
+/// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
+/// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
+pub const DEFAULT_MAX_ROWS_PREVIEW: usize = 1000;
 
 /// Row parsing options with nested column options
 #[derive(Debug, Clone, Default)]
@@ -135,11 +137,17 @@ impl OptionSet {
       self
   }
 
-  /// Sets the read mode to asynchronous.
+  /// Sets the read mode to asynchronous, single sheet mode
   pub fn read_mode_async(mut self) -> Self {
       self.read_mode = ReadMode::Async;
       self
   }
+
+   /// Sets the read mode to direct with multiple sheet output
+   pub fn read_mode_preview(mut self) -> Self {
+    self.read_mode = ReadMode::PreviewMultiple;
+    self
+}
 
   pub fn multimode(&self) -> bool {
     self.read_mode.is_multimode()
@@ -293,15 +301,15 @@ impl OptionSet {
     self.header_row as usize
   }
 
-  /// set the maximum of rows to be output synchronously
+  /// get the maximum of rows to be output synchronously
   pub fn max_rows(&self) -> usize {
-    if self.read_mode == ReadMode::PreviewMultiple {
-      return 100;
-    }
     if let Some(mr) = self.max {
       mr as usize
     } else {
-      DEFAULT_MAX_ROWS
+      match self.read_mode {
+        ReadMode::PreviewMultiple => DEFAULT_MAX_ROWS_PREVIEW,
+        _ => DEFAULT_MAX_ROWS
+      }
     }
   }
 

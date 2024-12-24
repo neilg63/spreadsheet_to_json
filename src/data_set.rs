@@ -89,21 +89,21 @@ impl ResultSet {
     }
   }
 
-  pub fn from_multiple(sheet_sets: &[(String, Vec<IndexMap<String, Value>>, usize)], info: &WorkbookInfo) -> Self {
-    let mut keys = vec![];
-    let mut num_rows = 0;
-    let mut data = IndexMap::new();
+  pub fn from_multiple(sheets: &[SheetDataSet], info: &WorkbookInfo) -> Self {
+    
+    
     let selected = None;
-    let mut sheets = vec![];
+    let mut sheet_names = vec![];
     let filename = info.filename.clone();
     let extension = info.extension.clone();
+    let mut keys: Vec<String> = vec![];
+    let mut num_rows = 0;
     let mut sheet_index: usize = 0;
-    for (sheet_ref, sheet_data, total) in sheet_sets {
-      data.insert(sheet_ref.to_owned(), sheet_data.to_owned());
-      num_rows += total;
-      sheets.push(sheet_ref.clone());
-      if sheet_index == 0 && sheet_data.len() > 0 {
-        keys = sheet_data[0].keys().map(|k| k.to_owned()).collect();
+    for sheet in sheets {
+      num_rows += sheet.num_rows;
+      sheet_names.push(sheet.name());
+      if sheet_index == 0 {
+        keys = sheet.keys.clone();
       }
       sheet_index += 1;
     }
@@ -111,10 +111,10 @@ impl ResultSet {
       extension,
       filename, 
       selected,
-      sheets,
+      sheets: sheet_names,
       keys,
       num_rows,
-      data: SpreadData::Multiple(data),
+      data: SpreadData::Multiple(sheets.to_vec()),
       out_ref: None
     }
   }
@@ -162,7 +162,7 @@ impl ResultSet {
           }
         }
       } else {
-        lines.push(format!("{}", json!(self.data)));
+        lines.push(format!("{}", self.data.to_json()));
       }
     }
     lines
@@ -192,9 +192,39 @@ impl ResultSet {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SheetDataSet {
+  pub sheet: (String, String),
+  pub num_rows: usize,
+  pub keys: Vec<String>,
+  pub rows: Vec<IndexMap<String, Value>>
+}
+
+impl SheetDataSet {
+
+  
+
+  pub fn new(name: &str, keys: &[String], rows: &[IndexMap<String, Value>], total: usize) -> Self {
+    Self {
+      sheet: (name.to_string(), name.to_snake_case()),
+      keys: keys.to_vec(),
+      rows: rows.to_vec(),
+      num_rows: total
+    }
+  }
+
+  pub fn key(&self) -> String {
+    self.sheet.1.clone()
+  }
+
+  pub fn name(&self) -> String {
+    self.sheet.0.clone()
+  }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum SpreadData {
    Single(Vec<IndexMap<String, Value>>),
-   Multiple(IndexMap<String, Vec<IndexMap<String, Value>>>)
+   Multiple(Vec<SheetDataSet>)
 }
 
 impl SpreadData {
@@ -202,14 +232,20 @@ impl SpreadData {
     SpreadData::Single(rows)
   }
 
-  pub fn from_multiple(rows: IndexMap<String, Vec<IndexMap<String, Value>>>) -> Self {
-    SpreadData::Multiple(rows)
+  pub fn from_multiple(sheet_data: &[SheetDataSet]) -> Self {
+    SpreadData::Multiple(sheet_data.to_owned())
   }
 
   pub fn first_sheet(&self) -> Vec<IndexMap<String, Value>> {
     match self {
       SpreadData::Single(rows) => rows.to_owned(),
-      SpreadData::Multiple(sheet_map) => sheet_map.values().next().unwrap().to_owned()
+      SpreadData::Multiple(sheets) => {
+        if let Some(sheet) = sheets.get(0) {
+          sheet.rows.to_owned()
+        } else {
+          vec![]
+        }
+      }
     }
   }
 
@@ -220,7 +256,13 @@ impl SpreadData {
         hm.insert("single".to_owned(), rows.to_owned());
         hm  
       },
-      SpreadData::Multiple(sheet_map) => sheet_map.to_owned()
+      SpreadData::Multiple(sheets) => {
+        let mut hm = IndexMap::new();
+        for sheet in sheets {
+          hm.insert(sheet.key(), sheet.rows.to_owned());
+        }
+        hm
+      }
     }
   }
 
@@ -272,6 +314,15 @@ pub fn match_sheet_name_and_index(workbook: &mut Sheets<BufReader<File>>, opts: 
               selected_names.push(sheet_names[sheet_index].clone());
           }
       }
+  }
+  if sheet_indices.len() < 1 && opts.indices.len() > 0 {
+    for s_index in opts.indices.clone() {
+      let sheet_index = s_index as usize;
+      if let Some(sheet_name) = sheet_names.get(sheet_index) {
+          sheet_indices.push(sheet_index);
+          selected_names.push(sheet_name.to_owned());
+      }
+    }
   }
   if sheet_indices.len() < 1 {
     sheet_indices = vec![0];
