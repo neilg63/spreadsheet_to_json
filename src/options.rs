@@ -651,7 +651,7 @@ impl ReadMode {
     let sample = key.to_lowercase().strip_non_alphanum();
     match sample.as_str() {
       "async" | "defer" | "deferred" | "a" => ReadMode::Async,
-      "preview" | "p" | "pre" | "multimode" | "multiple" | "previewmultiple" | "previewmulti" | "m" | "p" => ReadMode::PreviewMultiple,
+      "preview" | "p" | "pre" | "multimode" | "multiple" | "previewmultiple" | "previewmulti" | "m" => ReadMode::PreviewMultiple,
       _ => ReadMode::Sync
     }
   }
