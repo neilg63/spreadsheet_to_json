@@ -153,11 +153,11 @@ impl ResultSet {
       lines.push("data:".to_owned());
       if json_lines {
         let has_many_sheets = self.sheets.len() > 1;
-        for (sheet_ref, items  ) in &self.data.all_sheets() {
+        for sheet in &self.data.sheets() {
           if has_many_sheets {
-            lines.push(format!("Sheet: {} :", sheet_ref));
+            lines.push(format!("Sheet: {} :", sheet.name()));
           }
-          for item in items {
+          for item in &sheet.rows {
             lines.push(format!("{}", json!(item)));
           }
         }
@@ -249,20 +249,11 @@ impl SpreadData {
     }
   }
 
-  pub fn all_sheets(&self) -> IndexMap<String, Vec<IndexMap<String, Value>>> {
+  // Only for preview multiple mode
+  pub fn sheets(&self) -> Vec<SheetDataSet> {
     match self {
-      SpreadData::Single(rows) => {
-        let mut hm = IndexMap::new();
-        hm.insert("single".to_owned(), rows.to_owned());
-        hm  
-      },
-      SpreadData::Multiple(sheets) => {
-        let mut hm = IndexMap::new();
-        for sheet in sheets {
-          hm.insert(sheet.key(), sheet.rows.to_owned());
-        }
-        hm
-      }
+      SpreadData::Single(_) => vec![],
+      SpreadData::Multiple(sheets) => sheets.to_owned()
     }
   }
 
