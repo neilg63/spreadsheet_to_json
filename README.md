@@ -142,7 +142,7 @@ This must be called in an async function with a callback to save rows in separat
 
 ```rust
 use spreadsheet_to_json::*;
-use tokio;
+use spreadsheet_to_json::tokio;
 use indexmap::IndexMap;
 use serde_json::Value;
 
