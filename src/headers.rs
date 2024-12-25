@@ -58,11 +58,11 @@ let mut h_index = 0;
         let mut has_override = false;
         if let Some(col) = columns.get(h_index) {
             // only apply override if key is not empty
-            if col.key.len() > 0 {
-                headers.push(col.key.to_string());
+            if let Some(k_str) = &col.key {
+                headers.push(k_str.to_string());
                 has_override = true;
             }
-        } 
+        }
         if !has_override {
             if keep_headers && sn.len() > 0 {
                 headers.push(sn);
@@ -75,6 +75,15 @@ let mut h_index = 0;
     headers
 }
 
+/// Assign keys with A1+ notation
+pub fn build_a1_headers(first_row: &[String]) -> Vec<String> {
+    build_header_keys(first_row, &[], &FieldNameMode::A1)
+}
+
+/// Assign keys as c + zero-padded number
+pub fn build_c01_headers(first_row: &[String]) -> Vec<String> {
+    build_header_keys(first_row, &[], &FieldNameMode::NumPadded)
+}
 
 /// check if the row is not a header row. Always return true if row_index is greater than 0
 pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: usize, headers: &[String]) -> bool {
@@ -95,6 +104,10 @@ pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: us
 
 #[cfg(test)]
 mod tests {
+    use simple_string_patterns::ToStrings;
+
+    use crate::Format;
+
     use super::*;
 
     #[test]
@@ -137,5 +150,49 @@ mod tests {
     #[test]
     fn test_cell_letters_6() {
         assert_eq!(to_c01_col_key(20, 2000), "c0021");
+    }
+
+    #[test]
+    fn test_first_row() {
+        // header labels as captured from the top row
+        let first_row = ["Viscosity", "Rating", "", ""].to_strings();
+        let cols = vec![
+            Column::from_key_ref_with_format(None, Format::Float, None, false, false),
+            Column::from_key_ref_with_format(Some("points"), Format::Decimal(3), None, false, false),
+            Column::from_key_ref_with_format(Some("adjusted"), Format::Float, None, false, false),
+        ];
+        let headers = build_header_keys(&first_row, &cols, &FieldNameMode::AutoA1);
+        // should be lower-cased as `viscosity`
+        assert_eq!(headers.get(0).unwrap(), "viscosity");
+        // should be overridden as `points`
+        assert_eq!(headers.get(1).unwrap(), "points");
+        // should be labelled `adjusted`
+        assert_eq!(headers.get(2).unwrap(), "adjusted");
+        // fourth column  with empty heading should be assigned an A1-style key of `d`
+        assert_eq!(headers.get(3).unwrap(), "d");
+    }
+
+    #[test]
+    fn test_headers_a1_override() {
+        // header labels as captured from the top row
+        let first_row = ["Viscosity", "Rating", "Weighted", "Class"].to_strings();
+        
+        let headers = build_a1_headers(&first_row);
+        // should be lower-cased as `viscosity`
+        assert_eq!(headers.get(0).unwrap(), "a");
+        // the column should be d.
+        assert_eq!(headers.get(3).unwrap(), "d");
+    }
+
+    #[test]
+    fn test_headers_c01_override() {
+        // build header row with 200 sequential alphanumeric values
+        let first_row: Vec<String> = (0..200).map(|x| [char::from_u32(65 + (x % 26)).unwrap_or('_').to_string(), (x * 3 * 1).to_string()].concat()).collect();
+        
+        let headers = build_c01_headers(&first_row);
+        // should be lower-cased as `viscosity`
+        assert_eq!(headers.get(0).unwrap(), "c001");
+        // the column should be d.
+        assert_eq!(headers.get(3).unwrap(), "c004");
     }
 }

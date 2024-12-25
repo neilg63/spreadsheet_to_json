@@ -1,8 +1,7 @@
 use heck::ToSnakeCase;
 use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
-use crate::headers::*;
-use std::{path::Path, str::FromStr, sync::Arc};
+use std::{default, path::Path, str::FromStr, sync::Arc};
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
@@ -12,7 +11,7 @@ pub const DEFAULT_MAX_ROWS_PREVIEW: usize = 1000;
 #[derive(Debug, Clone, Default)]
 pub struct RowOptionSet {
   pub columns: Vec<Column>,
-  pub euro_number_format: bool, // always parse as euro number format
+  pub decimal_comma: bool, // always parse as euro number format
   pub date_only: bool,
 }
 
@@ -21,7 +20,7 @@ impl RowOptionSet {
   // simple constructor with column keys only
   pub fn simple(cols: &[Column]) -> Self {
     RowOptionSet {
-      euro_number_format: false,
+      decimal_comma: false,
       date_only: false,
       columns: cols.to_vec()
     }
@@ -30,7 +29,7 @@ impl RowOptionSet {
   // lets you set all options
   pub fn new(cols: &[Column], decimal_comma: bool, date_only: bool) -> Self {
     RowOptionSet {
-      euro_number_format: decimal_comma,
+      decimal_comma: decimal_comma,
       date_only,
       columns: cols.to_vec()
     }
@@ -49,7 +48,7 @@ impl RowOptionSet {
   }
 
   pub fn decimal_separator(&self) -> String {
-    if self.euro_number_format {
+    if self.decimal_comma {
       ","
     } else {
       "."
@@ -172,10 +171,8 @@ impl OptionSet {
   /// Override matched and unmatched headers with custom headers.
   pub fn override_headers(mut self, keys: &[&str]) -> Self {
     let mut columns: Vec<Column> = Vec::with_capacity(keys.len());
-    let mut index = 0;
     for ck in keys {
-        columns.push(Column::from_key_index(Some(&ck.to_snake_case()), index));
-        index += 1;
+        columns.push(Column::new(Some(&ck.to_snake_case())));
     }
     self.rows = RowOptionSet::simple(&columns);
     self
@@ -184,7 +181,6 @@ impl OptionSet {
   /// Override matched and unmatched columns with custom keys and/or formatting options
   pub fn override_columns(mut self, cols: &[Value]) -> Self {
     let mut columns: Vec<Column> = Vec::with_capacity(cols.len());
-    let mut index = 0;
     for ck in cols {
         let key = ck.get("key").unwrap().as_str().unwrap();
         let fmt = match ck.get("format") {
@@ -211,17 +207,16 @@ impl OptionSet {
           Some(date_val) => date_val.as_bool().unwrap_or(false),
           None => false
         };
-        let dec_commas_keys = ["euro_number_format", "decimal_comma"];
-        let mut euro_number_format = false;
+        let dec_commas_keys = ["decimal_comma", "decimal_comma"];
+        let mut decimal_comma = false;
 
         for key in &dec_commas_keys {
             if let Some(euro_val) = ck.get(*key) {
-                euro_number_format = euro_val.as_bool().unwrap_or(false);
+                decimal_comma = euro_val.as_bool().unwrap_or(false);
                 break;
             }
         }
-        columns.push(Column::from_key_ref_with_format(Some(key), index,fmt, default, date_only, euro_number_format));
-        index += 1;
+        columns.push(Column::from_key_ref_with_format(Some(key), fmt, default, date_only, decimal_comma));
     }
     self.rows = RowOptionSet::simple(&columns);
     self
@@ -363,6 +358,7 @@ pub enum Format {
   Text, // text
   Integer, // integer only
   Decimal(u8), // decimal to stated precision
+  Float, // f64 
   Boolean, // Boolean or  cast to boolean from integers
   Date, // Interpret as date only
   DateTime, // Interpret as full datetime
@@ -379,6 +375,7 @@ impl ToString for Format {
       Self::Text => "text",
       Self::Integer => "integer",
       Self::Decimal(n) => &format!("decimal({})", n),
+      Self::Float => "float",
       Self::Boolean => "boolean",
       Self::Date => "date",
       Self::DateTime => "datetime",
@@ -402,6 +399,7 @@ impl FromStr for Format {
         "d4" | "decimal_4" => Self::Decimal(4),
         "d5" | "decimal_5" => Self::Decimal(5),
         "d6" | "decimal_6" => Self::Decimal(6),
+        "fl" | "f" | "float" => Self::Float,
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
@@ -450,44 +448,76 @@ impl Format {
 
 #[derive(Debug, Clone)]
 pub struct Column {
-  pub key:  Arc<str>,
+  pub key:  Option<Arc<str>>,
   pub format: Format,
   pub default: Option<Value>,
   pub date_only: bool, // date only in Format::Auto mode with datetime objects
-  pub euro_number_format: bool, // parse as euro number format
+  pub decimal_comma: bool, // parse as euro number format
 }
 
 impl Column {
 
-  /// build from core options and sheet index only
-  pub fn from_key_index(key_opt: Option<&str>, index: usize) -> Self {
-    Self::from_key_ref_with_format(key_opt, index, Format::Auto, None, false, false)
+  /// build new column with an optional key name only
+  pub fn new(key_opt: Option<&str>) -> Self {
+    Self::from_key_ref_with_format(key_opt, Format::Auto, None, false, false)
   }
+
+  /// build new column data type override and optional default
+  pub fn new_format(fmt: Format, default: Option<Value>) -> Self {
+    Self::from_key_ref_with_format(None, fmt, default, false, false)
+  }
+
 
   // future development with column options
   #[allow(dead_code)]
-  pub fn from_key_custom(key_opt: Option<&str>, index: usize, date_only: bool, euro_number_format: bool) -> Self {
-    Self::from_key_ref_with_format(key_opt, index, Format::Auto, None, date_only, euro_number_format)
+  pub fn set_format(mut self, fmt: Format) -> Self {
+    self.format = fmt;
+    self
   }
 
-  pub fn from_key_ref_with_format(key_opt: Option<&str>, index: usize, format: Format, default: Option<Value>, date_only: bool, euro_number_format: bool) -> Self {
-    let key = key_opt.map(Arc::from).unwrap_or_else(|| Arc::from(to_head_key_default(index)));
+  #[allow(dead_code)]
+  pub fn set_default(mut self, val: Value) -> Self {
+    self.default = Some(val);
+    self
+  }
+
+  #[allow(dead_code)]
+  pub fn set_date_only(mut self, val: bool) -> Self {
+    self.date_only = val;
+    self
+  }
+
+  #[allow(dead_code)]
+  pub fn set_decimal_comma(mut self, val: bool) -> Self {
+    self.decimal_comma = val;
+    self
+  }
+
+  pub fn from_key_ref_with_format(key_opt: Option<&str>, format: Format, default: Option<Value>, date_only: bool, decimal_comma: bool) -> Self {
+    let mut key = None;
+    if let Some(k_str) = key_opt {
+      key = Some(Arc::from(k_str));
+    }
     Column {
       key,
       format,
       default,
       date_only,
-      euro_number_format
+      decimal_comma
     }
+  }
+
+  pub fn key_name(&self) -> String {
+    self.key.clone().unwrap_or(Arc::from("")).to_string()
   }
 
   pub fn to_json(&self) -> Value {
     json!({
-      "key": self.key.to_string(),
+      "key": self.key_name(),
       "format": self.format.to_string(),
       "default": self.default,
       "date_only": self.date_only,
-      "euro_number_format": self.euro_number_format
+      "decimal_comma": self.decimal_comma
     })
   }
 
@@ -502,14 +532,14 @@ impl Column {
     } else {
       "".to_string()
     };
-    let comma_str = if self.euro_number_format {
+    let comma_str = if self.decimal_comma {
       ", decimal comma"
     } else {
       ""
     };
     format!(
       "\tkey {}, format {}{}{}{}",
-      self.key.to_string(),
+      self.key_name(),
       self.format.to_string(),
       def_string,
       date_only_str,

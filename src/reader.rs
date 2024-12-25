@@ -13,9 +13,13 @@ use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
 
+use crate::fuzzy_datetime::fuzzy_to_datetime_string;
 use crate::headers::*;
 use crate::data_set::*;
+use crate::helpers::float_value;
+use crate::helpers::string_value;
 use crate::is_truthy::*;
+use crate::round_decimal::RoundDecimal;
 use crate::Extension;
 use crate::Format;
 use crate::OptionSet;
@@ -394,6 +398,11 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
     } else {
         Format::Auto
     };
+    let def_val = if let Some(c) = col {
+        c.default.clone()
+    } else {
+        None
+    };
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
         Data::Float(f) => {
@@ -421,6 +430,68 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
             Value::String(dt_ref)
         },
         Data::Bool(b) => Value::Bool(*b),
+        Data::String(s) => {
+            match format {
+                Format::Boolean => {
+                    if let Some(is_true) = is_truthy_core(s, false) {
+                        Value::Bool(is_true) 
+                    } else {
+                        if let Some(v) = def_val {
+                            v
+                        } else {
+                            Value::Null
+                        }
+                    }
+                },
+                Format::Truthy => {
+                    if let Some(is_true) = is_truthy_standard(s, false) {
+                        Value::Bool(is_true) 
+                    } else {
+                        if let Some(v) = def_val {
+                            v
+                        } else {
+                            Value::Null
+                        }
+                    }
+                },
+                Format::Decimal(places) => {
+                    if let Some(n) = s.to_first_number::<f64>() {
+                        float_value(n.round_decimal(places))
+                    } else {
+                        if let Some(v) = def_val {
+                            v
+                        } else {
+                            Value::Null
+                        }
+                    }
+                }
+                Format::Float => {
+                    if let Some(n) = s.to_first_number() {
+                        float_value(n)
+                    } else {
+                        if let Some(v) = def_val {
+                            v
+                        } else {
+                            Value::Null
+                        }
+                    }
+                },
+                Format::DateTime => {
+                  if let Some(dt_str) = fuzzy_to_datetime_string(s) {
+                    string_value(&dt_str)
+                  } else {
+                    if let Some(v) = def_val {
+                        v
+                    } else {
+                        Value::Null
+                    }
+                  }
+                },
+                _ => {
+                    Value::String(s.to_owned())
+                }
+            }
+        },
         // For other types, convert to string since JSON can't directly represent them as unquoted values
         Data::Empty => Value::Null,
         _ => Value::String(cell.to_string())
@@ -453,9 +524,9 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
         Format::Auto
     };
     let euro_num_mode = if let Some(c) = col.cloned() {
-        c.euro_number_format
+        c.decimal_comma
     } else {
-        opts.euro_number_format
+        opts.decimal_comma
     };
     let num_cell = if has_number {
         let euro_num_mode = is_euro_number_format(cell, euro_num_mode);
@@ -506,7 +577,11 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use serde_json::json;
+
+use crate::{helpers::*, Column};
+
+use super::*;
 
   #[test]
   fn test_direct_processing_xlsx() {
@@ -559,5 +634,35 @@ mod tests {
     // The first sheet's data should only output 10 rows (including the header)
     assert_eq!(dataset.data.first_sheet().len(), 10);
   }
+/* 
+  #[test]
+  fn test_column_override() {
+    let sample_json = json!([
+        {
+            "sku": "CHAIR16",
+            "height": "112cm",
+            "width": "69cm",
+            "approved": "Y"
+        },
+        {
+            "sku": "CHAIR42",
+            "height": "102cm",
+            "width": "59cm",
+            "approved": "N"
+        }
+    ]);
+
+    let items = json_array_to_indexmaps(sample_json);
+
+    let cols = vec![
+        Column::new_format(Format::Text, Some(string_value(""))),
+        Column::new_format(Format::Float, Some(float_value(95.0))),
+        Column::new_format(Format::Float, Some(float_value(65.0))),
+        Column::new_format(Format::Truthy, Some(bool_value(false))),
+    ];
+
+    // The first sheet's data should only output 10 rows (including the header)
+    assert_eq!(dataset.data.first_sheet().len(), 10);
+  } */
 
 }
