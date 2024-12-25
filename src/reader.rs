@@ -454,6 +454,18 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
                         }
                     }
                 },
+                Format::TruthyCustom(true_str, false_str ) => {
+                  let opts = to_truth_options(&true_str, &false_str, false, false);
+                  if let Some(is_true) = is_truthy_custom(s, &opts, false, false) {
+                      Value::Bool(is_true) 
+                  } else {
+                      if let Some(v) = def_val {
+                          v
+                      } else {
+                          Value::Null
+                      }
+                  }
+                },
                 Format::Decimal(places) => {
                     if let Some(n) = s.to_first_number::<f64>() {
                         float_value(n.round_decimal(places))
