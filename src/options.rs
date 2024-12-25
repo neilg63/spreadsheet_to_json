@@ -1,7 +1,7 @@
 use heck::ToSnakeCase;
 use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
-use std::{default, path::Path, str::FromStr, sync::Arc};
+use std::{path::Path, str::FromStr, sync::Arc};
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)

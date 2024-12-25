@@ -34,6 +34,12 @@ pub fn json_array_to_indexmaps(json: Value) -> Vec<IndexMap<String, Value>> {
     .collect()
 }
 
+pub fn json_array_to_calamine_rows(json: Value) -> Vec<Vec<Data>> {
+  json.as_array().unwrap().iter()
+  .map(|v| v.to_owned()).map(json_object_to_calamine_data)
+  .collect()
+}
+
 pub fn float_value(value: f64) -> Value {
   Value::Number(Number::from_f64(value).unwrap_or(Number::from_f64(0.0).unwrap()))
 }

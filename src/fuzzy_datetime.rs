@@ -16,28 +16,42 @@ pub fn fuzzy_to_datetime(dt: &str) -> Result<NaiveDateTime, GenericError> {
     }
 }
 
+pub fn fuzzy_to_date_string(dt: &str) -> Option<String> {
+	if let Some((date_str, _t_str)) = fuzzy_to_date_string_with_time(dt) {
+		Some(date_str)
+	} else {
+		None
+	}
+}
+
+/// convert a date-time-like string to a valid ISO 8601-compatbile string
+pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
+	let dt_base = dt.split('.').next().unwrap_or(dt);
+	let clean_dt = dt_base.replace("T", " ").trim().to_string();
+	let mut dt_parts = clean_dt.split_whitespace();
+	let date_part = dt_parts.next().unwrap_or("0000-01-01");
+	if date_part.contains_type(CharType::Alpha) {
+			return None;
+	}
+	let time_part = dt_parts.next().unwrap_or("00:00:00");
+
+	let d_parts: Vec<&str> = date_part.split('-').collect();
+	let mut date_parts: Vec<&str> = d_parts.into_iter().filter(|&n| n.is_digits_only()).collect();
+	if date_parts.len() < 1 {
+			return None;
+	}
+	while date_parts.len() < 3 {
+			date_parts.push("01");
+	}
+	let formatted_date = format!("{}-{}-{}", date_parts[0], date_parts[1], date_parts[2]);
+
+	Some((formatted_date, time_part.to_string()))
+}
+
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
 pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
-    let dt_base = dt.split('.').next().unwrap_or(dt);
-    let clean_dt = dt_base.replace("T", " ").trim().to_string();
-    let mut dt_parts = clean_dt.split_whitespace();
-    let date_part = dt_parts.next().unwrap_or("0000-01-01");
-    if date_part.contains_type(CharType::Alpha) {
-        return None;
-    }
-    let time_part = dt_parts.next().unwrap_or("00:00:00");
-
-    let d_parts: Vec<&str> = date_part.split('-').collect();
-    let mut date_parts: Vec<&str> = d_parts.into_iter().filter(|&n| n.is_digits_only()).collect();
-    if date_parts.len() < 1 {
-        return None;
-    }
-    while date_parts.len() < 3 {
-        date_parts.push("01");
-    }
-    let formatted_date = format!("{}-{}-{}", date_parts[0], date_parts[1], date_parts[2]);
-
-    let t_parts: Vec<&str> = time_part.split(':').collect();
+  if let Some((formatted_date, time_part)) = fuzzy_to_date_string_with_time(dt) {
+		let t_parts: Vec<&str> = time_part.split(':').collect();
     if let Some(&first) = t_parts.get(0) {
         if !first.is_digits_only() {
             return None;
@@ -52,6 +66,9 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
 
     let formatted_str = format!("{} {}", formatted_date, formatted_time);
     Some(formatted_str)
+	} else {
+		None
+	}
 }
 
 pub fn is_datetime_like(text: &str) -> bool {

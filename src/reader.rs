@@ -13,6 +13,7 @@ use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
 
+use crate::fuzzy_datetime::fuzzy_to_date_string;
 use crate::fuzzy_datetime::fuzzy_to_datetime_string;
 use crate::headers::*;
 use crate::data_set::*;
@@ -488,6 +489,17 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
                         }
                     }
                 },
+                Format::Date => {
+                  if let Some(d_str) = fuzzy_to_date_string(s) {
+                    string_value(&d_str)
+                  } else {
+                    if let Some(v) = def_val {
+                        v
+                    } else {
+                        Value::Null
+                    }
+                  }
+                },
                 Format::DateTime => {
                   if let Some(dt_str) = fuzzy_to_datetime_string(s) {
                     string_value(&dt_str)
@@ -646,25 +658,17 @@ use super::*;
     // The first sheet's data should only output 10 rows (including the header)
     assert_eq!(dataset.data.first_sheet().len(), 10);
   }
-/* 
-  #[test]
-  fn test_column_override() {
-    let sample_json = json!([
-        {
-            "sku": "CHAIR16",
-            "height": "112cm",
-            "width": "69cm",
-            "approved": "Y"
-        },
-        {
-            "sku": "CHAIR42",
-            "height": "102cm",
-            "width": "59cm",
-            "approved": "N"
-        }
-    ]);
 
-    let items = json_array_to_indexmaps(sample_json);
+  #[test]
+  fn test_column_override_1() {
+    let sample_json = json!({
+      "sku": "CHAIR16",
+      "height": "112cm",
+      "width": "69cm",
+      "approved": "Y"
+    });
+
+    let rows = json_object_to_calamine_data(sample_json);
 
     let cols = vec![
         Column::new_format(Format::Text, Some(string_value(""))),
@@ -674,7 +678,38 @@ use super::*;
     ];
 
     // The first sheet's data should only output 10 rows (including the header)
-    assert_eq!(dataset.data.first_sheet().len(), 10);
-  } */
+    let opts = &RowOptionSet::simple(&cols);
+    let result =  workbook_row_to_values(&rows, opts);
+    assert_eq!(result.get(1).unwrap(), 112.0);
+    assert_eq!(result.get(2).unwrap(), 69.0);
+    assert_eq!(result.get(3).unwrap(), true);
+  }
+
+
+  #[test]
+  fn test_column_override_2() {
+    let sample_json = json!({
+      "name": "Sophia",
+      "dob": "2001-09-23",
+      "weight": "62kg",
+      "result": "good"
+    });
+
+    let rows = json_object_to_calamine_data(sample_json);
+
+    let cols = vec![
+        Column::new_format(Format::Text, None),
+        Column::new_format(Format::Date, None),
+        Column::new_format(Format::Float, None),
+        Column::new_format(Format::truthy_custom("good", "bad"), Some(bool_value(false))),
+    ];
+
+    // The first sheet's data should only output 10 rows (including the header)
+    let opts = &RowOptionSet::simple(&cols);
+    let result =  workbook_row_to_values(&rows, opts);
+    assert_eq!(result.get(1).unwrap(), "2001-09-23");
+    assert_eq!(result.get(2).unwrap(), 62.0);
+    assert_eq!(result.get(3).unwrap(), true);
+  }
 
 }
