@@ -81,7 +81,7 @@ pub fn is_truthy_custom(txt: &str, opts: &[TruthyOption], use_defaults: bool, em
 /// Truth Option that may be case-sensitive and match either the start or anywhere within a string
 /// It's assumed truthy field use consistent naming conventions, but this allows some flexibility
 /// without using full regular expressions
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TruthyOption {
   pub is_true: bool,
   pub pattern: Arc<str>,
@@ -102,6 +102,12 @@ impl TruthyOption {
   pub fn sample(&self) -> String {
     self.pattern.to_string()
   }
+}
+
+pub fn extract_truth_patterns(opts: &[TruthyOption], is_true: bool) -> Vec<String> {
+  opts.into_iter()
+        .filter(|&o| o.is_true == is_true)
+        .map(|o| o.pattern.to_string()).collect()
 }
 
 /// convert a custom string setting into a full TruthyOptiuon
