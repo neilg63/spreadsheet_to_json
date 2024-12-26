@@ -5,7 +5,7 @@ use crate::error::GenericError;
 
 pub fn fuzzy_to_datetime(dt: &str) -> Result<NaiveDateTime, GenericError> {
     if let Some(formatted_str) = fuzzy_to_datetime_string(dt) {
-        NaiveDateTime::parse_from_str(&formatted_str, "%Y-%m-%d %H:%M:%S").map_err(|e| {
+        NaiveDateTime::parse_from_str(&formatted_str, "%Y-%m-%dT%H:%M:%S").map_err(|e| {
             match e.kind() {
                 ParseErrorKind::BadFormat => GenericError("bad_format"),
                 _ => GenericError("invalid_date_string")
@@ -124,10 +124,11 @@ mod tests {
         let sample_2 = "1876-08-29 17:15";
         assert!(fuzzy_to_datetime(sample_2).is_ok());
 
-        let sample_3 = "2023-10-10T10:10:10";
+				// correct sample datetime
+        let sample_3 = "2023-8-29 19:34:39";
         assert_eq!(
             fuzzy_to_datetime_string(sample_3),
-            Some("2023-10-10 10:10:10".to_string())
+            Some("2023-08-29T19:34:39".to_string())
         );
 
 				// Correct date-only string
