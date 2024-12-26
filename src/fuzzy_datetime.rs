@@ -61,7 +61,6 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
 	fuzzy_to_datetime_string_opts(dt, 'T')
 }
 
-
 pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char) -> Option<String> {
   if let Some((formatted_date, time_part)) = fuzzy_to_date_string_with_time(dt) {
 		let t_parts: Vec<&str> = time_part.split(':').collect();
@@ -101,14 +100,6 @@ pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char) -> Option<String
 
 pub fn is_datetime_like(text: &str) -> bool {
     fuzzy_to_datetime_string(text).is_some()
-}
-
-pub fn correct_iso_datetime(text: &str) -> String {
-	if let Some(dt_str) = fuzzy_to_datetime_string(text) {
-		dt_str
-	} else {
-		"".to_owned()
-	}
 }
 
 #[cfg(test)]

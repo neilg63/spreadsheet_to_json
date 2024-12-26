@@ -12,10 +12,7 @@ use indexmap::IndexMap;
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
-
-use crate::fuzzy_datetime::correct_iso_datetime;
-use crate::fuzzy_datetime::fuzzy_to_date_string;
-use crate::fuzzy_datetime::fuzzy_to_datetime_string;
+use crate::fuzzy_datetime::{fuzzy_to_date_string, fuzzy_to_datetime_string};
 use crate::headers::*;
 use crate::data_set::*;
 use crate::helpers::float_value;
@@ -401,9 +398,7 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
         Data::Float(f) => process_float_value(*f, format),
-        Data::DateTimeIso(d) => {
-          Value::String(correct_iso_datetime(d))
-        },
+        Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, opts.date_only),
         Data::DateTime(d) => process_excel_datetime_value(d, def_val, opts.date_only),
         Data::Bool(b) => Value::Bool(*b),
         Data::String(s) => process_string_value(s, format, def_val),
@@ -431,17 +426,35 @@ fn process_excel_datetime_value(
     dt_ref
 }
 
+fn process_iso_datetime_value(
+  dt_str: &str,
+  def_val: Option<Value>,
+  date_only: bool
+) -> Value {
+  if date_only {
+    fuzzy_to_date_string(dt_str).map_or_else(
+      || def_val.unwrap_or(Value::Null),
+      |dt| Value::String(dt)
+    )
+  } else {
+    fuzzy_to_datetime_string(dt_str).map_or_else(
+      || def_val.unwrap_or(Value::Null),
+      |dt| Value::String(dt)
+    )
+  }
+}
+
 fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> Value {
-    match format {
-        Format::Boolean => process_truthy_value(value, def_val, is_truthy_core),
-        Format::Truthy => process_truthy_value(value, def_val, is_truthy_standard),
-        Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| is_truthy_custom(v, &opts, false, false)),
-        Format::Decimal(places) => process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places))),
-        Format::Float => process_numeric_value(value, def_val, float_value),
-        Format::Date => process_date_value(value, def_val, fuzzy_to_date_string),
-        Format::DateTime => process_date_value(value, def_val, fuzzy_to_datetime_string),
-        _ => Value::String(value.to_owned()),
-    }
+  match format {
+    Format::Boolean => process_truthy_value(value, def_val, is_truthy_core),
+    Format::Truthy => process_truthy_value(value, def_val, is_truthy_standard),
+    Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| is_truthy_custom(v, &opts, false, false)),
+    Format::Decimal(places) => process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places))),
+    Format::Float => process_numeric_value(value, def_val, float_value),
+    Format::Date => process_date_value(value, def_val, fuzzy_to_date_string),
+    Format::DateTime => process_date_value(value, def_val, fuzzy_to_datetime_string),
+    _ => Value::String(value.to_owned()),
+  }
 }
 
 fn process_truthy_value<F>(value: &str, def_val: Option<Value>, truthy_fn: F) -> Value
