@@ -43,7 +43,15 @@ pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
 	while date_parts.len() < 3 {
 			date_parts.push("01");
 	}
-	let formatted_date = format!("{}-{}-{}", date_parts[0], date_parts[1], date_parts[2]);
+	let month = date_parts[1].parse::<u8>().unwrap_or(0);
+	if month < 1 || month > 12 {
+		return None;
+	}
+	let day = date_parts[2].parse::<u8>().unwrap_or(0);
+	if month < 1 || day > 31 {
+		return None;
+	}
+	let formatted_date = format!("{}-{:02}-{:02}", date_parts[0], month, day);
 
 	Some((formatted_date, time_part.to_string()))
 }
@@ -57,12 +65,27 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
             return None;
         }
     }
-    let mut time_parts: Vec<&str> = t_parts.into_iter().filter(|&n| n.is_digits_only()).collect();
+    let mut time_parts: Vec<u8> = t_parts.into_iter()
+		.filter(|&n| n.is_digits_only())
+		.map(|tp| tp.parse::<u8>().unwrap_or(0))
+		.collect();
 
     while time_parts.len() < 3 {
-        time_parts.push("00");
+        time_parts.push(0);
     }
-    let formatted_time = format!("{}:{}:{}", time_parts[0], time_parts[1], time_parts[2]);
+		let hrs = time_parts[0];
+		if hrs > 23 {
+			return None;
+		}
+		let mins = time_parts[1];
+		if mins > 59 {
+			return None;
+		}
+		let secs = time_parts[2];
+		if secs > 59 {
+			return None;
+		}
+    let formatted_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
 
     let formatted_str = format!("{} {}", formatted_date, formatted_time);
     Some(formatted_str)
@@ -94,10 +117,10 @@ mod tests {
             Some("2023-10-10 10:10:10".to_string())
         );
 
-        let sample_4 = "2023-10-10";
+        let sample_4 = "2023-9-10";
         assert_eq!(
             fuzzy_to_datetime_string(sample_4),
-            Some("2023-10-10 00:00:00".to_string())
+            Some("2023-09-10 00:00:00".to_string())
         );
 
         let sample_5 = "10:10:10";

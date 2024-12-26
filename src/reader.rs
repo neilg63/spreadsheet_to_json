@@ -690,7 +690,7 @@ use super::*;
   fn test_column_override_2() {
     let sample_json = json!({
       "name": "Sophia",
-      "dob": "2001-09-23",
+      "dob": "2001-9-23",
       "weight": "62kg",
       "result": "good"
     });
