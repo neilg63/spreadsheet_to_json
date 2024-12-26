@@ -129,6 +129,7 @@ pub async fn read_workbook_core<'a>(
     }
 }
 
+/// Read multiple worksheets from a workbook in preview mode.
 async fn read_multiple_worksheets(
     workbook: &mut Sheets<BufReader<File>>,
     sheet_names: &[String],
@@ -196,6 +197,7 @@ async fn read_multiple_worksheets(
     Ok(ResultSet::from_multiple(&sheets, &info))
 }
 
+/// Read a single worksheet from a workbook in immediate (sync) or asycnhronous modes
 pub async fn read_single_worksheet(
   mut workbook: Sheets<BufReader<File>>,
   sheet_ref: &str,

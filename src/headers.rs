@@ -21,26 +21,30 @@ pub fn to_a1_col_key(index: usize) -> String {
     result.chars().rev().collect()
 }
 
+pub fn to_padded_col_suffix(prefix: &str, index: usize, num_cols: usize) -> String {
+  let width = if num_cols < 100 {
+    2
+  } else if num_cols < 1000 {
+    3
+  } else if num_cols < 10000 {
+    4
+  } else {
+    5
+  };
+  let num = index + 1;
+  format!("{}{:0width$}", prefix, num, width = width)
+}
+
 pub fn to_c01_col_key(index: usize, num_cols: usize) -> String {
-    let width = if num_cols < 100 {
-        2
-    } else if num_cols < 1000 {
-        3
-    } else if num_cols < 10000 {
-        4
-    } else {
-        5
-    };
-    let num = index + 1;
-    format!("c{:0width$}", num, width = width)
+  to_padded_col_suffix("c", index, num_cols)
 }
 
 pub fn to_head_key(index: usize, field_mode: &FieldNameMode, num_cols: usize) -> String {
-    if field_mode.use_c01() {
-        to_c01_col_key(index, num_cols)
-    } else {
-        to_a1_col_key(index)
-    }
+  if field_mode.use_c01() {
+      to_c01_col_key(index, num_cols)
+  } else {
+      to_a1_col_key(index)
+  }
 }
 
 pub fn to_head_key_default(index: usize) -> String {
@@ -59,13 +63,23 @@ let mut h_index = 0;
         if let Some(col) = columns.get(h_index) {
             // only apply override if key is not empty
             if let Some(k_str) = &col.key {
-                headers.push(k_str.to_string());
-                has_override = true;
+              let h_key = if headers.contains(&k_str.to_string()) {
+                to_padded_col_suffix(k_str, h_index, num_cols)
+              } else {
+                k_str.to_string()
+              };
+              headers.push(h_key);
+              has_override = true;
             }
         }
         if !has_override {
             if keep_headers && sn.len() > 0 {
-                headers.push(sn);
+                let sn_key = if headers.contains(&sn) {
+                    to_padded_col_suffix(&sn, h_index, num_cols)
+                } else {
+                    sn
+                };
+                headers.push(sn_key);
             } else {
                 headers.push(to_head_key(h_index, field_mode, num_cols));
             }
