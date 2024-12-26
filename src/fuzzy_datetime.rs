@@ -4,24 +4,24 @@ use simple_string_patterns::{CharGroupMatch, CharType, SimplContainsType};
 use crate::error::GenericError;
 
 pub fn fuzzy_to_datetime(dt: &str) -> Result<NaiveDateTime, GenericError> {
-    if let Some(formatted_str) = fuzzy_to_datetime_string(dt) {
-        NaiveDateTime::parse_from_str(&formatted_str, "%Y-%m-%dT%H:%M:%S").map_err(|e| {
-            match e.kind() {
-                ParseErrorKind::BadFormat => GenericError("bad_format"),
-                _ => GenericError("invalid_date_string")
-            }
-        })
-    } else {
-        Err(GenericError("invalid_date_string"))
-    }
+  if let Some(formatted_str) = fuzzy_to_datetime_string(dt) {
+    NaiveDateTime::parse_from_str(&formatted_str, "%Y-%m-%dT%H:%M:%S%.3fZ").map_err(|e| {
+        match e.kind() {
+            ParseErrorKind::BadFormat => GenericError("bad_format"),
+            _ => GenericError("invalid_date_string")
+        }
+    })
+  } else {
+    Err(GenericError("invalid_date_string"))
+  }
 }
 
 pub fn fuzzy_to_date_string(dt: &str) -> Option<String> {
-	if let Some((date_str, _t_str)) = fuzzy_to_date_string_with_time(dt) {
-		Some(date_str)
-	} else {
-		None
-	}
+  if let Some((date_str, _t_str)) = fuzzy_to_date_string_with_time(dt) {
+    Some(date_str)
+  } else {
+    None
+  }
 }
 
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
@@ -58,10 +58,14 @@ pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
 
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
 pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
-	fuzzy_to_datetime_string_opts(dt, 'T')
+	fuzzy_to_datetime_string_opts(dt, 'T', true)
 }
 
-pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char) -> Option<String> {
+/// convert a date-time-like string to a valid ISO 8601-compatbile string
+/// dt: the date-time string
+/// separator: the separator between the date and time parts
+/// add_z: whether to add 'Z' timezone indicator
+pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char, add_z: bool) -> Option<String> {
   if let Some((formatted_date, time_part)) = fuzzy_to_date_string_with_time(dt) {
 		let t_parts: Vec<&str> = time_part.split(':').collect();
     if let Some(&first) = t_parts.get(0) {
@@ -90,8 +94,8 @@ pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char) -> Option<String
 			return None;
 		}
     let formatted_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
-
-    let formatted_str = format!("{}{}{}", formatted_date, separator, formatted_time);
+    let tz_suffix = if add_z { "Z" } else { "" };
+    let formatted_str = format!("{}{}{}{}", formatted_date, separator, formatted_time, tz_suffix);
     Some(formatted_str)
 	} else {
 		None
@@ -119,7 +123,7 @@ mod tests {
         let sample_3 = "2023-8-29 19:34:39";
         assert_eq!(
             fuzzy_to_datetime_string(sample_3),
-            Some("2023-08-29T19:34:39".to_string())
+            Some("2023-08-29T19:34:39Z".to_string())
         );
 
 				// Correct date-only string

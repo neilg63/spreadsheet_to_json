@@ -410,10 +410,10 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
 }
 
 fn process_float_value(value: f64, format: Format) -> Value {
-    match format {
-        Format::Integer => Value::Number(Number::from_i128(value as i128).unwrap()),
-        _ => Value::Number(Number::from_f64(value).unwrap()),
-    }
+  match format {
+    Format::Integer => Value::Number(Number::from_i128(value as i128).unwrap()),
+    _ => Value::Number(Number::from_f64(value).unwrap()),
+  }
 }
 
 fn process_excel_datetime_value(
@@ -422,8 +422,15 @@ fn process_excel_datetime_value(
     date_only: bool
 ) -> Value {
     let dt_ref = datetime.as_datetime().map_or_else(
-        || def_val.unwrap_or(Value::Null),
-        |dt| Value::String(dt.format(if date_only { "%Y-%m-%d" } else { "%Y-%m-%dT%H:%M:%S" }).to_string())
+      || def_val.unwrap_or(Value::Null),
+      |dt| {
+        let formatted_date = if date_only {
+            dt.format("%Y-%m-%d").to_string()
+        } else {
+            dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+        };
+        Value::String(formatted_date)
+      }
     );
     dt_ref
 }
