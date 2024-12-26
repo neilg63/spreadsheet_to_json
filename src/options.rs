@@ -3,7 +3,7 @@ use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
 use std::{path::Path, str::FromStr, sync::Arc};
 
-use crate::is_truthy::{extract_truth_patterns, split_truthy_custom_option_str, to_truth_options, TruthyOption};
+use crate::is_truthy::{extract_truth_patterns, to_truth_options, TruthyOption};
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
@@ -385,7 +385,7 @@ impl ToString for Format {
       Self::Truthy => "truthy",
       Self::TruthyCustom(opts) => {
         let true_str: Vec<String> = extract_truth_patterns(&opts, true);
-        let false_str: Vec<String> = extract_truth_patterns(&opts, true);
+        let false_str: Vec<String> = extract_truth_patterns(&opts, false);
         &format!("truthy({},{})", true_str.join("|"), false_str.join("|"))
       },
     };

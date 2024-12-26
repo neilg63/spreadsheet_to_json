@@ -13,6 +13,7 @@ use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
 
+use crate::fuzzy_datetime::correct_iso_datetime;
 use crate::fuzzy_datetime::fuzzy_to_date_string;
 use crate::fuzzy_datetime::fuzzy_to_datetime_string;
 use crate::headers::*;
@@ -391,133 +392,88 @@ fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
     cells
 }
 
-// convert a spreadsheet data cell to a polymorphic serde_json::Value object
+/// Convert a spreadsheet data cell to a polymorphic serde_json::Value object
 fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
     let col = opts.column(c_index);
-    let format = if let Some(c) = col {
-        c.format.to_owned()
-    } else {
-        Format::Auto
-    };
-    let def_val = if let Some(c) = col {
-        c.default.clone()
-    } else {
-        None
-    };
+    let format = col.map_or(Format::Auto, |c| c.format.to_owned());
+    let def_val = col.and_then(|c| c.default.clone());
+
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
-        Data::Float(f) => {
-            match format {
-                Format::Integer => Value::Number(Number::from_i128(*f as i128).unwrap()),
-                _ => Value::Number(Number::from_f64(*f).unwrap())
-            }
+        Data::Float(f) => process_float_value(*f, format),
+        Data::DateTimeIso(d) => {
+          Value::String(correct_iso_datetime(d))
         },
-        Data::DateTimeIso(d) => Value::String(d.to_owned()),
-        Data::DateTime(d) => {
-            let ndt = d.as_datetime();
-            let dt_ref = if let Some(dt) = ndt {
-                let fmt_str = match format {
-                    Format::Date => "%Y-%m-%d",
-                    _ => if opts.date_only {
-                        "%Y-%m-%d"
-                    } else {
-                        "%Y-%m-%dT%H:%M:%S.000Z"
-                    }
-                };
-                dt.format(fmt_str).to_string()
-            } else {
-                "".to_string()
-            };
-            Value::String(dt_ref)
-        },
+        Data::DateTime(d) => process_excel_datetime_value(d, def_val, opts.date_only),
         Data::Bool(b) => Value::Bool(*b),
-        Data::String(s) => {
-            match format {
-                Format::Boolean => {
-                    if let Some(is_true) = is_truthy_core(s, false) {
-                        Value::Bool(is_true) 
-                    } else {
-                        if let Some(v) = def_val {
-                            v
-                        } else {
-                            Value::Null
-                        }
-                    }
-                },
-                Format::Truthy => {
-                    if let Some(is_true) = is_truthy_standard(s, false) {
-                        Value::Bool(is_true) 
-                    } else {
-                        if let Some(v) = def_val {
-                            v
-                        } else {
-                            Value::Null
-                        }
-                    }
-                },
-                Format::TruthyCustom(opts) => {
-                  if let Some(is_true) = is_truthy_custom(s, &opts, false, false) {
-                      Value::Bool(is_true) 
-                  } else {
-                      if let Some(v) = def_val {
-                          v
-                      } else {
-                          Value::Null
-                      }
-                  }
-                },
-                Format::Decimal(places) => {
-                    if let Some(n) = s.to_first_number::<f64>() {
-                        float_value(n.round_decimal(places))
-                    } else {
-                        if let Some(v) = def_val {
-                            v
-                        } else {
-                            Value::Null
-                        }
-                    }
-                }
-                Format::Float => {
-                    if let Some(n) = s.to_first_number() {
-                        float_value(n)
-                    } else {
-                        if let Some(v) = def_val {
-                            v
-                        } else {
-                            Value::Null
-                        }
-                    }
-                },
-                Format::Date => {
-                  if let Some(d_str) = fuzzy_to_date_string(s) {
-                    string_value(&d_str)
-                  } else {
-                    if let Some(v) = def_val {
-                        v
-                    } else {
-                        Value::Null
-                    }
-                  }
-                },
-                Format::DateTime => {
-                  if let Some(dt_str) = fuzzy_to_datetime_string(s) {
-                    string_value(&dt_str)
-                  } else {
-                    if let Some(v) = def_val {
-                        v
-                    } else {
-                        Value::Null
-                    }
-                  }
-                },
-                _ => {
-                    Value::String(s.to_owned())
-                }
-            }
-        },
-        // For other types, convert to string since JSON can't directly represent them as unquoted values
-        Data::Empty => Value::Null,
-        _ => Value::String(cell.to_string())
+        Data::String(s) => process_string_value(s, format, def_val),
+        Data::Empty => def_val.unwrap_or(Value::Null),
+        _ => Value::String(cell.to_string()),
+    }
+}
+
+fn process_float_value(value: f64, format: Format) -> Value {
+    match format {
+        Format::Integer => Value::Number(Number::from_i128(value as i128).unwrap()),
+        _ => Value::Number(Number::from_f64(value).unwrap()),
+    }
+}
+
+fn process_excel_datetime_value(
+    datetime: &calamine::ExcelDateTime,
+    def_val: Option<Value>,
+    date_only: bool
+) -> Value {
+    let dt_ref = datetime.as_datetime().map_or_else(
+        || def_val.unwrap_or(Value::Null),
+        |dt| Value::String(dt.format(if date_only { "%Y-%m-%d" } else { "%Y-%m-%dT%H:%M:%S" }).to_string())
+    );
+    dt_ref
+}
+
+fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> Value {
+    match format {
+        Format::Boolean => process_truthy_value(value, def_val, is_truthy_core),
+        Format::Truthy => process_truthy_value(value, def_val, is_truthy_standard),
+        Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| is_truthy_custom(v, &opts, false, false)),
+        Format::Decimal(places) => process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places))),
+        Format::Float => process_numeric_value(value, def_val, float_value),
+        Format::Date => process_date_value(value, def_val, fuzzy_to_date_string),
+        Format::DateTime => process_date_value(value, def_val, fuzzy_to_datetime_string),
+        _ => Value::String(value.to_owned()),
+    }
+}
+
+fn process_truthy_value<F>(value: &str, def_val: Option<Value>, truthy_fn: F) -> Value
+where
+    F: Fn(&str, bool) -> Option<bool>,
+{
+    if let Some(is_true) = truthy_fn(value, false) {
+        Value::Bool(is_true)
+    } else {
+        def_val.unwrap_or(Value::Null)
+    }
+}
+
+fn process_numeric_value<F>(value: &str, def_val: Option<Value>, numeric_fn: F) -> Value
+where
+    F: Fn(f64) -> Value,
+{
+    if let Some(n) = value.to_first_number::<f64>() {
+        numeric_fn(n)
+    } else {
+        def_val.unwrap_or(Value::Null)
+    }
+}
+
+fn process_date_value<F>(value: &str, def_val: Option<Value>, date_fn: F) -> Value
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(date_str) = date_fn(value) {
+        string_value(&date_str)
+    } else {
+        def_val.unwrap_or(Value::Null)
     }
 }
 
@@ -679,8 +635,11 @@ use super::*;
     // The first sheet's data should only output 10 rows (including the header)
     let opts = &RowOptionSet::simple(&cols);
     let result =  workbook_row_to_values(&rows, opts);
+    // the second column be cast to 112.0
     assert_eq!(result.get(1).unwrap(), 112.0);
+    // the third column be cast to 69.0
     assert_eq!(result.get(2).unwrap(), 69.0);
+    // the fourth column be cast to boolean
     assert_eq!(result.get(3).unwrap(), true);
   }
 
@@ -691,7 +650,7 @@ use super::*;
       "name": "Sophia",
       "dob": "2001-9-23",
       "weight": "62kg",
-      "result": "good"
+      "result": "GOOD"
     });
 
     let rows = json_object_to_calamine_data(sample_json);
@@ -700,6 +659,7 @@ use super::*;
         Column::new_format(Format::Text, None),
         Column::new_format(Format::Date, None),
         Column::new_format(Format::Float, None),
+        // the fourth column be cast to boolean
         Column::new_format(Format::truthy_custom("good", "bad"), Some(bool_value(false))),
     ];
 

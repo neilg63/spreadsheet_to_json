@@ -58,6 +58,11 @@ pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
 
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
 pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
+	fuzzy_to_datetime_string_opts(dt, 'T')
+}
+
+
+pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char) -> Option<String> {
   if let Some((formatted_date, time_part)) = fuzzy_to_date_string_with_time(dt) {
 		let t_parts: Vec<&str> = time_part.split(':').collect();
     if let Some(&first) = t_parts.get(0) {
@@ -87,7 +92,7 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
 		}
     let formatted_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
 
-    let formatted_str = format!("{} {}", formatted_date, formatted_time);
+    let formatted_str = format!("{}{}{}", formatted_date, separator, formatted_time);
     Some(formatted_str)
 	} else {
 		None
@@ -96,6 +101,14 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
 
 pub fn is_datetime_like(text: &str) -> bool {
     fuzzy_to_datetime_string(text).is_some()
+}
+
+pub fn correct_iso_datetime(text: &str) -> String {
+	if let Some(dt_str) = fuzzy_to_datetime_string(text) {
+		dt_str
+	} else {
+		"".to_owned()
+	}
 }
 
 #[cfg(test)]
@@ -117,12 +130,13 @@ mod tests {
             Some("2023-10-10 10:10:10".to_string())
         );
 
+				// Correct date-only string
         let sample_4 = "2023-9-10";
         assert_eq!(
-            fuzzy_to_datetime_string(sample_4),
-            Some("2023-09-10 00:00:00".to_string())
+            fuzzy_to_date_string(sample_4),
+            Some("2023-09-10".to_string())
         );
-
+				// time-only strings should not be valid
         let sample_5 = "10:10:10";
         assert_eq!(
             fuzzy_to_datetime_string(sample_5),
