@@ -17,7 +17,16 @@ pub fn to_a1_col_key(index: usize) -> String {
     result.chars().rev().collect()
 }
 
+pub fn to_padded_col_key(prefix: &str, index: usize, num_cols: usize) -> String {
+    build_padded_col_key(prefix, false, index, num_cols)
+}
+
 pub fn to_padded_col_suffix(prefix: &str, index: usize, num_cols: usize) -> String {
+  build_padded_col_key(prefix, true, index, num_cols)
+}
+
+
+fn build_padded_col_key(prefix: &str, underscore: bool, index: usize, num_cols: usize) -> String {
   let width = if num_cols < 100 {
     2
   } else if num_cols < 1000 {
@@ -28,11 +37,12 @@ pub fn to_padded_col_suffix(prefix: &str, index: usize, num_cols: usize) -> Stri
     5
   };
   let num = index + 1;
-  format!("{}{:0width$}", prefix, num, width = width)
+  let separator = if underscore { "_" } else { "" };
+  format!("{}{}{:0width$}", prefix, separator, num, width = width)
 }
 
 pub fn to_c01_col_key(index: usize, num_cols: usize) -> String {
-  to_padded_col_suffix("c", index, num_cols)
+  to_padded_col_key("c", index, num_cols)
 }
 
 pub fn to_head_key(index: usize, field_mode: &FieldNameMode, num_cols: usize) -> String {

@@ -412,6 +412,8 @@ fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize)
 fn process_float_value(value: f64, format: Format) -> Value {
   match format {
     Format::Integer => Value::Number(Number::from_i128(value as i128).unwrap()),
+    Format::Boolean => Value::Bool(value >= 1.0),
+    Format::Text => Value::String(value.to_string()),
     _ => Value::Number(Number::from_f64(value).unwrap()),
   }
 }

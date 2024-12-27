@@ -46,7 +46,10 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.json_lines()` Output will be rendered one json object per row.
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
-- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as a serde_json::Value`. More details to come soon.
+- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as an array of serde_json::Value` key/value objects, where :
+  - `key`: overrides the header key,
+  - `format`: string | integer | float | d1, d2, d3, d4, d5, d6 | datetime | date | boolean | truthy | truthy:true_key,false_key 
+  - `default`: overrides the default value for empty cells
 
 Simple example:
 ```rust 

@@ -1,5 +1,5 @@
 use chrono::{format::ParseErrorKind, NaiveDateTime};
-use simple_string_patterns::{CharGroupMatch, CharType, SimplContainsType};
+use simple_string_patterns::{CharGroupMatch, CharType, SimplContainsType, ToSegments};
 
 use crate::error::GenericError;
 
@@ -17,16 +17,20 @@ pub fn fuzzy_to_datetime(dt: &str) -> Result<NaiveDateTime, GenericError> {
 }
 
 pub fn fuzzy_to_date_string(dt: &str) -> Option<String> {
-  if let Some((date_str, _t_str)) = fuzzy_to_date_string_with_time(dt) {
-    Some(date_str)
+  if let Some((date_str, _t_str, _ms_tz)) = fuzzy_to_date_string_with_time(dt) {
+    if !date_str.is_empty() {
+      Some(date_str)
+    } else {
+      None
+    }
   } else {
     None
   }
 }
 
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
-pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
-	let dt_base = dt.split('.').next().unwrap_or(dt);
+pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String, String)> {
+	let (dt_base, milli_tz) = dt.to_start_end(".");
 	let clean_dt = dt_base.replace("T", " ").trim().to_string();
 	let mut dt_parts = clean_dt.split_whitespace();
 	let date_part = dt_parts.next().unwrap_or("0000-01-01");
@@ -53,7 +57,7 @@ pub fn fuzzy_to_date_string_with_time(dt: &str) -> Option<(String, String)> {
 	}
 	let formatted_date = format!("{}-{:02}-{:02}", date_parts[0], month, day);
 
-	Some((formatted_date, time_part.to_string()))
+	Some((formatted_date, time_part.to_string(), milli_tz))
 }
 
 /// convert a date-time-like string to a valid ISO 8601-compatbile string
@@ -66,7 +70,7 @@ pub fn fuzzy_to_datetime_string(dt: &str) -> Option<String> {
 /// separator: the separator between the date and time parts
 /// add_z: whether to add 'Z' timezone indicator
 pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char, add_z: bool) -> Option<String> {
-  if let Some((formatted_date, time_part)) = fuzzy_to_date_string_with_time(dt) {
+  if let Some((formatted_date, time_part, ms_tz)) = fuzzy_to_date_string_with_time(dt) {
 		let t_parts: Vec<&str> = time_part.split(':').collect();
     if let Some(&first) = t_parts.get(0) {
         if !first.is_digits_only() {
@@ -94,9 +98,23 @@ pub fn fuzzy_to_datetime_string_opts(dt: &str, separator: char, add_z: bool) -> 
 			return None;
 		}
     let formatted_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
-    let tz_suffix = if add_z { "Z" } else { "" };
+    let tz_suffix = if add_z {
+      let max_len = if ms_tz.len() > 3 {
+        3
+      } else {
+        ms_tz.len()
+      };
+      let ms = ms_tz[0..max_len].parse::<u16>().unwrap_or(0);
+      format!(".{:03}Z", ms)
+    } else {
+      "".to_string()
+    };
     let formatted_str = format!("{}{}{}{}", formatted_date, separator, formatted_time, tz_suffix);
-    Some(formatted_str)
+    if !formatted_str.is_empty() {
+      Some(formatted_str)
+    } else {
+      None
+    }
 	} else {
 		None
 	}
@@ -123,7 +141,7 @@ mod tests {
         let sample_3 = "2023-8-29 19:34:39";
         assert_eq!(
             fuzzy_to_datetime_string(sample_3),
-            Some("2023-08-29T19:34:39Z".to_string())
+            Some("2023-08-29T19:34:39.000Z".to_string())
         );
 
 				// Correct date-only string
@@ -137,6 +155,13 @@ mod tests {
         assert_eq!(
             fuzzy_to_datetime_string(sample_5),
             None
+        );
+
+        // datetime with extra milliseconds and timezone
+        let sample_3 = "2023-08-29T19:34:39.678Z";
+        assert_eq!(
+            fuzzy_to_datetime_string(sample_3),
+            Some(sample_3.to_string())
         );
     }
 

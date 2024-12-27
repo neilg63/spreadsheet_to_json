@@ -183,8 +183,8 @@ impl OptionSet {
   /// Override matched and unmatched columns with custom keys and/or formatting options
   pub fn override_columns(mut self, cols: &[Value]) -> Self {
     let mut columns: Vec<Column> = Vec::with_capacity(cols.len());
-    for ck in cols {
-        let key = ck.get("key").unwrap().as_str().unwrap();
+    for json_value in cols {
+ /*        let key = ck.get("key").unwrap().as_str().unwrap();
         let fmt = match ck.get("format") {
           Some(fmt_val) => {
             match Format::from_str(fmt_val.as_str().unwrap()) {
@@ -217,8 +217,8 @@ impl OptionSet {
                 decimal_comma = euro_val.as_bool().unwrap_or(false);
                 break;
             }
-        }
-        columns.push(Column::from_key_ref_with_format(Some(key), fmt, default, date_only, decimal_comma));
+        } */
+        columns.push(Column::from_json(json_value));
     }
     self.rows = RowOptionSet::simple(&columns);
     self
@@ -405,6 +405,8 @@ impl FromStr for Format {
         "d4" | "decimal_4" => Self::Decimal(4),
         "d5" | "decimal_5" => Self::Decimal(5),
         "d6" | "decimal_6" => Self::Decimal(6),
+        "d7" | "decimal_7" => Self::Decimal(7),
+        "d8" | "decimal_8" => Self::Decimal(6),
         "fl" | "f" | "float" => Self::Float,
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
@@ -472,6 +474,45 @@ impl Column {
   pub fn new_format(fmt: Format, default: Option<Value>) -> Self {
     Self::from_key_ref_with_format(None, fmt, default, false, false)
   }
+
+  /// build new column data type override and optional default
+  pub fn from_json(json: &Value) -> Self {
+    let key_opt = json.get("key").map(|v| v.as_str().unwrap_or(""));
+    let fmt = match json.get("format") {
+      Some(fmt_val) => {
+        match Format::from_str(fmt_val.as_str().unwrap()) {
+          Ok(fmt) => fmt,
+          Err(_) => Format::Auto
+        }
+      },
+      None => Format::Auto
+    };
+    let default = match json.get("default") {
+      Some(def_val) => {
+        match def_val {
+          Value::String(s) => Some(Value::String(s.clone())),
+          Value::Number(n) => Some(Value::Number(n.clone())),
+          Value::Bool(b) => Some(Value::Bool(b.clone())),
+          _ => None
+        }
+      },
+      None => None
+    };
+    let date_only = match json.get("date_only") {
+      Some(date_val) => date_val.as_bool().unwrap_or(false),
+      None => false
+    };
+    let dec_commas_keys = ["decimal_comma", "dec_comma"];
+    let mut decimal_comma = false;
+
+    for key in &dec_commas_keys {
+      if let Some(euro_val) = json.get(*key) {
+        decimal_comma = euro_val.as_bool().unwrap_or(false);
+        break;
+      }
+    }
+    Column::from_key_ref_with_format(key_opt, fmt, default, date_only, decimal_comma)
+}
 
 
   // future development with column options
@@ -715,7 +756,7 @@ pub enum FieldNameMode {
   AutoA1, // will use A1 column keys if headers are unavailable
   AutoNumPadded, // will use C01 format if column headers are unavailable
   A1, // Defaults to A1 columns unless custom keys are added
-  NumPadded // Defaults to C01 format unless custom keys are added
+  NumPadded, // Defaults to C01 format unless custom keys are added
 }
 
 /// either Preview or Async mode
@@ -739,6 +780,7 @@ impl FieldNameMode {
       FieldNameMode::AutoA1
     }
   }
+
 
   /// use AQ column field style
   pub fn use_a1(&self) -> bool {
@@ -789,6 +831,13 @@ mod tests {
   fn test_format_mode() {
     let custom_boolean = Format::truthy_custom("si", "no");
     assert_eq!(custom_boolean.to_string(), "truthy(si,no)");
+  }
+
+  #[test]
+  fn test_match_truthy_custom() {
+    let (true_keys, false_keys) = match_custom_truthy("tr:si,no").unwrap();
+    assert_eq!("si", true_keys);
+    assert_eq!("no", false_keys);
   }
 
 }
