@@ -46,10 +46,14 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.json_lines()` Output will be rendered one json object per row.
 - `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
-- `override_columns(cols: &[Value])` This lets you override column key names and value formats via a hashmap, represented here as an array of serde_json::Value` key/value objects, where :
+- `override_columns(cols: &[Value])` Lets you override column settings, represented here as an array of `serde_json::Value` key/value objects, where :
   - `key`: overrides the header key,
-  - `format`: string | integer | float | d1, d2, d3, d4, d5, d6 | datetime | date | boolean | truthy | truthy:true_key,false_key 
-  - `default`: overrides the default value for empty cells
+  - `format`: string | integer | float | d1 ... d8 | datetime | date | boolean | truthy | truthy:true_key,false_key 
+     - `d1` to `d8` will round floats to the specified max. number of decimal places.
+     - `boolean` will cast integer, floats >= 1 as true as well as the strings '1' and 'true', with < 1 and the strings `0` and `false` being false. If unmatched or empty the field value will be null.
+     - `truthy` will cast common English-like abbreviations such as Y, Yes as true and N or No false
+     - `truthy:true_key,false_key` lets you cast custom strings to true or false. If unmatched the field value will be null.
+  - `default`: overrides the default value for empty cells.
 
 Simple example:
 ```rust 
