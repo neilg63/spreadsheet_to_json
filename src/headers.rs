@@ -5,10 +5,6 @@ use serde_json::Value;
 
 use crate::{Column, FieldNameMode};
 
-pub fn to_letter(index: u32) -> char {
-    char::from_u32(97 + index).unwrap_or(' ') // Use 97 for 'a'
-}
-
 pub fn to_a1_col_key(index: usize) -> String {
     let mut result = String::new();
     let mut n = index as i32; // Work with i32 to handle potential negative values
@@ -115,7 +111,6 @@ pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: us
   is_header
 }
 
-
 #[cfg(test)]
 mod tests {
     use simple_string_patterns::ToStrings;
@@ -123,14 +118,6 @@ mod tests {
     use crate::Format;
 
     use super::*;
-
-    #[test]
-    fn test_letter() {
-
-        assert_eq!(to_letter(5), 'f');
-
-        assert_eq!(to_letter(25), 'z');
-    }
 
     #[test]
     fn test_cell_letters_1() {
@@ -204,9 +191,9 @@ mod tests {
         let first_row: Vec<String> = (0..200).map(|x| [char::from_u32(65 + (x % 26)).unwrap_or('_').to_string(), (x * 3 * 1).to_string()].concat()).collect();
         
         let headers = build_c01_headers(&first_row);
-        // should be lower-cased as `viscosity`
+        // the column should be c0001
         assert_eq!(headers.get(0).unwrap(), "c001");
-        // the column should be d.
+        // the column should be c0004
         assert_eq!(headers.get(3).unwrap(), "c004");
     }
 }
