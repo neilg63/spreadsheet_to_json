@@ -231,7 +231,7 @@ This crate is still alpha and likely to undergo breaking changes as it's part of
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
 - **0.1.4** Added support for the Excel Binary format (.xlsb)
-- **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_direct()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function
-- **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become you should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
+- **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_async()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function
+- **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become. You should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
 - **0.1.7** Added support for multiple worksheets in preview mode and refined output options
 - **0.1.10** Reviewed date-time parsing options for Excel and OpenDocument spreadsheets. Reorganised cell post-processors by detected data-type.
