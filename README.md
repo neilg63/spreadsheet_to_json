@@ -30,9 +30,6 @@ It supports the following formats:
 - Can identify truthy text or number cells and convert them to booleans
 - Can save large files asynchronously
 
-## To do
-Full explanation of options to come.
-
 ## Core Options
 
 Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")` with chained setter methods:
@@ -54,6 +51,9 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
      - `truthy` will cast common English-like abbreviations such as Y, Yes as true and N or No false
      - `truthy:true_key,false_key` lets you cast custom strings to true or false. If unmatched the field value will be null.
   - `default`: overrides the default value for empty cells.
+
+#### To do
+More details of options to come.
 
 Simple example:
 ```rust 
