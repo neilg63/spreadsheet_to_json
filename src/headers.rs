@@ -37,7 +37,7 @@ fn build_padded_col_key(prefix: &str, underscore: bool, index: usize, num_cols: 
     5
   };
   let num = index + 1;
-  let separator = if underscore { "_" } else { "" };
+let separator = if underscore { "_" } else { "" };
   format!("{}{}{:0width$}", prefix, separator, num, width = width)
 }
 
@@ -110,15 +110,19 @@ pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: us
   if row_index > 0 {
       return true;
   }
-  let mut is_header = true;
+  let mut h_index = 0;
+  let mut num_matched: usize = 0;
   for (_key, value) in row_map.iter() {
     let ref_key = value.to_string().to_snake_case();
-    if !headers.contains(&ref_key) {
-      is_header = false;
-      break;
+    if let Some(hk) = headers.get(h_index) {
+      let sn = hk.to_snake_case();
+      if sn == ref_key {
+        num_matched += 1;
+      }
     }
+    h_index += 1;
   }
-  is_header
+  num_matched < headers.len()
 }
 
 #[cfg(test)]
