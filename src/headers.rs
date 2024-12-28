@@ -116,7 +116,7 @@ pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: us
     let ref_key = value.to_string().to_snake_case();
     if let Some(hk) = headers.get(h_index) {
       let sn = hk.to_snake_case();
-      if sn == ref_key {
+      if sn == ref_key || sn.len() == 0 {
         num_matched += 1;
       }
     }
