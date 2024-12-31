@@ -66,13 +66,14 @@ pub struct ResultSet {
     pub keys: Vec<String>,
     pub num_rows: usize,
     pub data: SpreadData,
-    pub out_ref: Option<String>
+    pub out_ref: Option<String>,
+    pub opts: OptionSet,
 }
 
 impl ResultSet {
 
   /// Instantiate with Core workbook info, header keys, data set and optional output reference
-  pub fn new(info: &WorkbookInfo, keys: &[String], data_set: DataSet, out_ref: Option<&str>) -> Self {
+  pub fn new(info: &WorkbookInfo, keys: &[String], data_set: DataSet, opts: &OptionSet, out_ref: Option<&str>) -> Self {
     let (num_rows, data) = match data_set {
       DataSet::WithRows(size, rows) => (size, rows),
       DataSet::Count(size) => (size, vec![])
@@ -85,11 +86,12 @@ impl ResultSet {
       keys: keys.to_vec(),
       num_rows,
       data: SpreadData::from_single(data),
-      out_ref: out_ref.map(|s| s.to_string())
+      out_ref: out_ref.map(|s| s.to_string()),
+      opts: opts.to_owned()
     }
   }
 
-  pub fn from_multiple(sheets: &[SheetDataSet], info: &WorkbookInfo) -> Self {
+  pub fn from_multiple(sheets: &[SheetDataSet], info: &WorkbookInfo, opts: &OptionSet) -> Self {
     let selected = None;
     let mut sheet_names = vec![];
     let filename = info.filename.clone();
@@ -113,7 +115,8 @@ impl ResultSet {
       keys,
       num_rows,
       data: SpreadData::Multiple(sheets.to_vec()),
-      out_ref: None
+      out_ref: None,
+      opts: opts.to_owned()
     }
   }
 
@@ -134,7 +137,9 @@ impl ResultSet {
       "sheets": self.sheets,
       "num_rows": self.num_rows,
       "fields": self.keys,
+      "multimode": self.multimode(),
       "data": self.data.to_json(),
+      "opts": self.opts.to_json()
     });
     if let Some(out_ref_str) = self.out_ref.clone() {
       result["outref"] = json!(out_ref_str);
@@ -162,6 +167,10 @@ impl ResultSet {
     }
     lines.push(format!("row count: {}", self.num_rows));
     lines.push(format!("fields: {}", self.keys.join(",")));
+    lines.push(format!("multimode: {}", self.multimode()));
+    for opt_line in self.opts.to_lines() {
+      lines.push(opt_line);
+    }
     if let Some(out_ref_str) = self.out_ref.clone() {
       lines.push(format!("output reference: {}", out_ref_str));
     } else {

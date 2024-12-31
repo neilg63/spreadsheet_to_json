@@ -184,40 +184,6 @@ impl OptionSet {
   pub fn override_columns(mut self, cols: &[Value]) -> Self {
     let mut columns: Vec<Column> = Vec::with_capacity(cols.len());
     for json_value in cols {
- /*        let key = ck.get("key").unwrap().as_str().unwrap();
-        let fmt = match ck.get("format") {
-          Some(fmt_val) => {
-            match Format::from_str(fmt_val.as_str().unwrap()) {
-              Ok(fmt) => fmt,
-              Err(_) => Format::Auto
-            }
-          },
-          None => Format::Auto
-        };
-        let default = match ck.get("default") {
-          Some(def_val) => {
-            match def_val {
-              Value::String(s) => Some(Value::String(s.clone())),
-              Value::Number(n) => Some(Value::Number(n.clone())),
-              Value::Bool(b) => Some(Value::Bool(b.clone())),
-              _ => None
-            }
-          },
-          None => None
-        };
-        let date_only = match ck.get("date_only") {
-          Some(date_val) => date_val.as_bool().unwrap_or(false),
-          None => false
-        };
-        let dec_commas_keys = ["decimal_comma", "decimal_comma"];
-        let mut decimal_comma = false;
-
-        for key in &dec_commas_keys {
-            if let Some(euro_val) = ck.get(*key) {
-                decimal_comma = euro_val.as_bool().unwrap_or(false);
-                break;
-            }
-        } */
         columns.push(Column::from_json(json_value));
     }
     self.rows = RowOptionSet::simple(&columns);
@@ -232,17 +198,17 @@ impl OptionSet {
 
   pub fn row_mode(&self) -> String {
     if self.jsonl {
-      "json lines"
+      "JSON lines"
     } else {
-      ""
+      "JSON"
     }.to_string()
   }
 
   pub fn header_mode(&self) -> String {
-    if self.jsonl {
-      "json lines"
+    if self.omit_header {
+      "ignore"
     } else {
-      ""
+      "capture"
     }.to_string()
   }
 
@@ -267,6 +233,7 @@ impl OptionSet {
       "max": self.max.unwrap_or(0),
       "header_row": self.header_row,
       "omit_header": self.omit_header,
+      "red_mode": self.read_mode.to_string(),
       "jsonl": self.jsonl
     })
   }
@@ -290,11 +257,16 @@ impl OptionSet {
     if let Some(path) = self.path.clone() {
       lines.push(format!("path: {}", path));
     }
+    if self.max.is_some() {
+      let max_val = self.max.unwrap_or(0);
+      if max_val > 0 {
+        lines.push(format!("max rows: {}", max_val));
+      }
+    }
     lines.extend(vec![
-      format!("max: {}", self.max.unwrap_or(0) ),
-      format!("header row: {}", self.header_row),
-      format!("headers: {}", self.header_mode()),
       format!("mode: {}", self.row_mode()),
+      format!("headers: {}", self.header_mode()),
+      format!("header row: {}", self.header_row),
       format!("decimal separator: {}", self.rows.decimal_separator()),
       format!("date mode: {}", self.rows.date_mode()),
       format!("column style: {}", self.field_mode.to_string())
@@ -746,6 +718,17 @@ impl ReadMode {
       Self::PreviewMultiple => true,
       _ => false
     }
+  }
+}
+
+impl ToString for ReadMode {
+
+  fn to_string(&self) -> String {
+    match self {
+      Self::Async => "deferred",
+      Self::PreviewMultiple => "preview",
+      _ => "direct"
+    }.to_string()
   }
 }
 

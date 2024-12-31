@@ -194,7 +194,7 @@ async fn read_multiple_worksheets(
       sheets.push(SheetDataSet::new(&sheet_ref, &headers, &rows, total));
       sheet_index += 1;
     }
-    Ok(ResultSet::from_multiple(&sheets, &info))
+    Ok(ResultSet::from_multiple(&sheets, &info, opts))
 }
 
 /// Read a single worksheet from a workbook in immediate (sync) or asycnhronous modes
@@ -290,7 +290,7 @@ pub async fn read_single_worksheet(
   }
   
   let ds = DataSet::from_count_and_rows(total, rows, opts);
-  Ok(ResultSet::new(info, &headers, ds, out_ref))
+  Ok(ResultSet::new(info, &headers, ds, opts, out_ref))
 }
 
 /// Process a CSV/TSV file asynchronously with an optional row save method 
@@ -364,7 +364,7 @@ pub async fn read_csv_core<'a>(
         }
         let info = WorkbookInfo::simple(path_data);
         let ds = DataSet::from_count_and_rows(total, rows, opts);
-        Ok(ResultSet::new(&info, &headers, ds, out_ref))
+        Ok(ResultSet::new(&info, &headers, ds, opts, out_ref))
     } else {
         let error_msg = match path_data.ext() {
             Extension::Tsv => "unreadable_tsv_file",
