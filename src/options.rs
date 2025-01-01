@@ -1,4 +1,5 @@
 use heck::ToSnakeCase;
+use indexmap::IndexMap;
 use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
 use std::{path::Path, str::FromStr, sync::Arc};
@@ -212,36 +213,49 @@ impl OptionSet {
     }.to_string()
   }
 
+  /// render option output contextually as JSON
   pub fn to_json(&self) -> Value {
-    let selected = if self.multimode() {
-      json!({
-        "sheets": self.selected.clone().unwrap_or(vec![]),
-        "indices": self.indices.clone()
-      })
-    } else {
-      json!({
-        "sheet": self.selected.clone().unwrap_or(vec![]),
-        "index": self.indices.get(0).unwrap_or(&0)
-      })
-    };
-    json!({
-      "selected": selected,
-      "path": self.path.clone().unwrap_or("".to_string()),
-      "decimal_separator": self.rows.decimal_separator(),
-      "date_only": self.rows.date_only,
-      "columns": self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect::<Vec<Value>>(),
-      "max": self.max.unwrap_or(0),
-      "header_row": self.header_row,
-      "omit_header": self.omit_header,
-      "red_mode": self.read_mode.to_string(),
-      "jsonl": self.jsonl
-    })
+    
+    let mut output: IndexMap<String, Value> = IndexMap::new();
+    if let Some(selected) =  self.selected.clone() {
+      let selected = if self.multimode() {
+        json!({
+          "sheets": selected,
+          "indices": self.indices.clone()
+        })
+      } else {
+        json!({
+          "sheet": selected.first().unwrap_or(&"".to_string()),
+          "index": self.indices.get(0).unwrap_or(&0)
+        })
+      };
+      output.insert("selected".to_string(), selected.into());
+    }
+    if let Some(path) = self.path.clone() {
+      output.insert("path".to_string(), path.into());
+    }
+    if let Some(max_val) = self.max {
+      output.insert("max".to_string(), max_val.into());
+    }
+    output.insert("omit_header".to_string(), self.omit_header.into());
+    output.insert("header_row".to_string(), self.header_row.into());
+    output.insert("read_mode".to_string(), self.read_mode.to_string().into());
+    output.insert("jsonl".to_string(), self.jsonl.into());
+    output.insert("decimal_separator".to_string(), self.rows.decimal_separator().into());
+    output.insert("date_only".to_string(), self.rows.date_only.into());
+    if self.columns().len() > 0 {
+      let columns: Vec<Value> = self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect();
+      output.insert("columns".to_string(), columns.into());
+    }
+    json!(output)
   }
 
   pub fn index_list(&self) -> String {
     self.indices.clone().into_iter().map(|s| s.to_string()).collect::<Vec<String>>().join(", ")
   }
 
+  /// render option output contextually as a list of strings
+  /// for use in a terminal or text output
   pub fn to_lines(&self) -> Vec<String> {
     let mut lines = vec![];
     if let Some(s_names) = self.selected.clone() {
