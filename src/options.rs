@@ -171,6 +171,14 @@ impl OptionSet {
     self.read_mode.is_multimode()
   }
 
+  pub fn file_name(&self) -> Option<String> {
+    if let Some(path_str) = self.path.clone() {
+      Path::new(&path_str).file_name().map(|f| f.to_string_lossy().to_string())
+    } else {
+      None
+    }
+  }
+
   /// Override matched and unmatched headers with custom headers.
   pub fn override_headers(mut self, keys: &[&str]) -> Self {
     let mut columns: Vec<Column> = Vec::with_capacity(keys.len());
@@ -231,8 +239,8 @@ impl OptionSet {
       };
       output.insert("selected".to_string(), selected.into());
     }
-    if let Some(path) = self.path.clone() {
-      output.insert("path".to_string(), path.into());
+    if let Some(fname) = self.file_name() {
+      output.insert("file name".to_string(), fname.into());
     }
     if let Some(max_val) = self.max {
       output.insert("max".to_string(), max_val.into());
@@ -268,8 +276,8 @@ impl OptionSet {
     } else if self.indices.len() > 0 {
       lines.push(format!("sheet indices: {}", self.index_list()));
     }
-    if let Some(path) = self.path.clone() {
-      lines.push(format!("path: {}", path));
+    if let Some(fname) = self.file_name() {
+      lines.push(format!("file name: {}", fname));
     }
     if self.max.is_some() {
       let max_val = self.max.unwrap_or(0);

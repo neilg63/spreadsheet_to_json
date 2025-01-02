@@ -231,6 +231,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuzzy-datetime"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34126802b59e63fc6109903828cd2af85994dafcbb2b283a42c07a852d44dee6"
+dependencies = [
+ "chrono",
+ "simple-string-patterns",
+]
+
+[[package]]
 name = "gimli"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -545,11 +555,12 @@ dependencies = [
 
 [[package]]
 name = "spreadsheet-to-json"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "calamine",
  "chrono",
  "csv",
+ "fuzzy-datetime",
  "heck",
  "indexmap",
  "serde",

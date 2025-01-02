@@ -6,7 +6,6 @@ pub mod euro_number_format;
 pub mod is_truthy;
 pub mod helpers;
 pub mod round_decimal;
-pub mod fuzzy_datetime;
 pub mod error;
 
 // make tokio available to implementers if not imported directly

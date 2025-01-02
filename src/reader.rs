@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
-use crate::fuzzy_datetime::{fuzzy_to_date_string, fuzzy_to_datetime_string};
+use fuzzy_datetime::{iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
 use crate::headers::*;
 use crate::data_set::*;
 use crate::helpers::float_value;
@@ -443,12 +443,12 @@ fn process_iso_datetime_value(
   date_only: bool
 ) -> Value {
   if date_only {
-    fuzzy_to_date_string(dt_str).map_or_else(
+    iso_fuzzy_to_date_string(dt_str).map_or_else(
       || def_val.unwrap_or(Value::Null),
       |dt| Value::String(dt)
     )
   } else {
-    fuzzy_to_datetime_string(dt_str).map_or_else(
+    iso_fuzzy_to_datetime_string(dt_str).map_or_else(
       || def_val.unwrap_or(Value::Null),
       |dt| Value::String(dt)
     )
@@ -462,8 +462,8 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
     Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| is_truthy_custom(v, &opts, false, false)),
     Format::Decimal(places) => process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places))),
     Format::Float => process_numeric_value(value, def_val, float_value),
-    Format::Date => process_date_value(value, def_val, fuzzy_to_date_string),
-    Format::DateTime => process_date_value(value, def_val, fuzzy_to_datetime_string),
+    Format::Date => process_date_value(value, def_val, iso_fuzzy_to_date_string),
+    Format::DateTime => process_date_value(value, def_val, iso_fuzzy_to_datetime_string),
     _ => Value::String(value.to_owned()),
   }
 }
