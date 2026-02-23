@@ -400,7 +400,7 @@ impl FromStr for Format {
         "d5" | "decimal_5" => Self::Decimal(5),
         "d6" | "decimal_6" => Self::Decimal(6),
         "d7" | "decimal_7" => Self::Decimal(7),
-        "d8" | "decimal_8" => Self::Decimal(6),
+        "d8" | "decimal_8" => Self::Decimal(8),
         "fl" | "f" | "float" => Self::Float,
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,

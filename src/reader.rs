@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
-use calamine::Sheets;
+use calamine::{open_workbook_auto, Data, Reader, Sheets, Metadata};
 use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
 use tokio::sync::mpsc;
@@ -11,7 +11,6 @@ use simple_string_patterns::*;
 use indexmap::IndexMap;
 use std::path::Path;
 
-use calamine::{open_workbook_auto, Data, Reader};
 use fuzzy_datetime::{iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
 use crate::headers::*;
 use crate::data_set::*;
@@ -578,13 +577,29 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
 
 
 
+pub async fn read_workbook_sheet_info<'a>(
+    path_data: &PathData<'a>
+) -> Result<IndexMap<String, usize>, GenericError> {
+    if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
+        let sheets = workbook.sheet_names().into_iter().map (|m| {
+            (m.to_string(), workbook.worksheet_range(&m).unwrap().rows().count())
+        });
+        let mut im: IndexMap<String, usize> = IndexMap::new();
+        for (name, count) in sheets {
+            im.insert(name, count);
+        }
+        Ok(im)
+    } else {
+        Err(GenericError("cannot_open_workbook"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+  use std::path;
   use serde_json::json;
-
-use crate::{helpers::*, Column};
-
-use super::*;
+  use crate::{helpers::*, Column};
+  use super::*;
 
   #[test]
   fn test_direct_processing_xlsx() {
@@ -667,7 +682,6 @@ use super::*;
     assert_eq!(result.get(3).unwrap(), true);
   }
 
-
   #[test]
   fn test_column_override_2() {
     let sample_json = json!({
@@ -693,6 +707,16 @@ use super::*;
     assert_eq!(result.get(1).unwrap(), "2001-09-23");
     assert_eq!(result.get(2).unwrap(), 62.0);
     assert_eq!(result.get(3).unwrap(), true);
+  }
+
+  #[tokio::test]
+  async fn test_read_workbook_info() {
+    //let sample_path = "data/sample-data-1.xlsx";
+    let sample_path = "../calamine/tests/Narrow format.xlsx";
+    let path_data = PathData::new(path::Path::new(sample_path));
+    let info = read_workbook_sheet_info(&path_data).await;
+    println!("{:?}", info);
+    assert!(info.is_ok());
   }
 
 }
