@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
-use calamine::{open_workbook_auto, Data, Reader, Sheets, Metadata};
+use calamine::{open_workbook_auto, Data, Reader, Sheets};
 use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
 use tokio::sync::mpsc;
