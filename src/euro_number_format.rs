@@ -31,7 +31,7 @@ pub fn is_euro_number_format(txt: &str, enforce_euro_mode: bool) -> bool {
         if let Some(c_pos) = comma_pos {
             d_pos < c_pos
         } else {
-            // if it only has one dot only interpreet as decimal separator if enforce_euro_mode is true
+            // if it only has one dot only interpate as decimal separator if enforce_euro_mode is true
             num_dots > 1 || enforce_euro_mode
         }
     } else {
