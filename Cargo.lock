@@ -18,6 +18,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 
 [[package]]
+name = "alphanumeric"
+version = "0.1.1"
+dependencies = [
+ "to_segments",
+]
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -223,7 +230,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34126802b59e63fc6109903828cd2af85994dafcbb2b283a42c07a852d44dee6"
 dependencies = [
  "chrono",
- "simple-string-patterns",
+ "simple-string-patterns 0.3.16",
 ]
 
 [[package]]
@@ -283,6 +290,15 @@ dependencies = [
  "hashbrown",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "is_truthy"
+version = "0.1.0"
+dependencies = [
+ "alphanumeric",
+ "simple-string-patterns 0.4.0",
+ "to_segments",
 ]
 
 [[package]]
@@ -537,6 +553,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a94730aaeff8fc9f5517e8c81248fc5c9bfeba1aa846866550b883f34a6f2bee"
 
 [[package]]
+name = "simple-string-patterns"
+version = "0.4.0"
+dependencies = [
+ "alphanumeric",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -556,15 +579,18 @@ dependencies = [
 name = "spreadsheet-to-json"
 version = "0.1.14"
 dependencies = [
+ "alphanumeric",
  "calamine",
  "chrono",
  "csv",
  "fuzzy-datetime",
  "heck",
  "indexmap",
+ "is_truthy",
  "serde",
  "serde_json",
- "simple-string-patterns",
+ "simple-string-patterns 0.4.0",
+ "to_segments",
  "tokio",
 ]
 
@@ -578,6 +604,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "to_segments"
+version = "0.1.2"
 
 [[package]]
 name = "tokio"

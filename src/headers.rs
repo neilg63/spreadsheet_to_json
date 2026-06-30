@@ -1,4 +1,3 @@
-
 use heck::ToSnakeCase;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -22,35 +21,34 @@ pub fn to_padded_col_key(prefix: &str, index: usize, num_cols: usize) -> String 
 }
 
 pub fn to_padded_col_suffix(prefix: &str, index: usize, num_cols: usize) -> String {
-  build_padded_col_key(prefix, true, index, num_cols)
+    build_padded_col_key(prefix, true, index, num_cols)
 }
 
-
 fn build_padded_col_key(prefix: &str, underscore: bool, index: usize, num_cols: usize) -> String {
-  let width = if num_cols < 100 {
-    2
-  } else if num_cols < 1000 {
-    3
-  } else if num_cols < 10000 {
-    4
-  } else {
-    5
-  };
-  let num = index + 1;
-let separator = if underscore { "_" } else { "" };
-  format!("{}{}{:0width$}", prefix, separator, num, width = width)
+    let width = if num_cols < 100 {
+        2
+    } else if num_cols < 1000 {
+        3
+    } else if num_cols < 10000 {
+        4
+    } else {
+        5
+    };
+    let num = index + 1;
+    let separator = if underscore { "_" } else { "" };
+    format!("{}{}{:0width$}", prefix, separator, num, width = width)
 }
 
 pub fn to_c01_col_key(index: usize, num_cols: usize) -> String {
-  to_padded_col_key("c", index, num_cols)
+    to_padded_col_key("c", index, num_cols)
 }
 
 pub fn to_head_key(index: usize, field_mode: &FieldNameMode, num_cols: usize) -> String {
-  if field_mode.use_c01() {
-      to_c01_col_key(index, num_cols)
-  } else {
-      to_a1_col_key(index)
-  }
+    if field_mode.use_c01() {
+        to_c01_col_key(index, num_cols)
+    } else {
+        to_a1_col_key(index)
+    }
 }
 
 pub fn to_head_key_default(index: usize) -> String {
@@ -58,8 +56,12 @@ pub fn to_head_key_default(index: usize) -> String {
 }
 
 /// Build header keys from the first row of a CSV file or headers captured from a spreadsheet
-pub fn build_header_keys(first_row: &[String], columns: &[Column], field_mode: &FieldNameMode) -> Vec<String> {
-let mut h_index = 0;
+pub fn build_header_keys(
+    first_row: &[String],
+    columns: &[Column],
+    field_mode: &FieldNameMode,
+) -> Vec<String> {
+    let mut h_index = 0;
     let mut headers: Vec<String> = vec![];
     let num_cols = first_row.len();
     let keep_headers = field_mode.keep_headers();
@@ -69,13 +71,13 @@ let mut h_index = 0;
         if let Some(col) = columns.get(h_index) {
             // only apply override if key is not empty
             if let Some(k_str) = &col.key {
-              let h_key = if headers.contains(&k_str.to_string()) {
-                to_padded_col_suffix(k_str, h_index, num_cols)
-              } else {
-                k_str.to_string()
-              };
-              headers.push(h_key);
-              has_override = true;
+                let h_key = if headers.contains(&k_str.to_string()) {
+                    to_padded_col_suffix(k_str, h_index, num_cols)
+                } else {
+                    k_str.to_string()
+                };
+                headers.push(h_key);
+                has_override = true;
             }
         }
         if !has_override {
@@ -106,28 +108,31 @@ pub fn build_c01_headers(first_row: &[String]) -> Vec<String> {
 }
 
 /// check if the row is not a header row. Always return true if row_index is greater than 0
-pub(crate) fn is_not_header_row(row_map: &IndexMap<String, Value>, row_index: usize, headers: &[String]) -> bool {
-  if row_index > 0 {
-      return true;
-  }
-  let mut h_index = 0;
-  let mut num_matched: usize = 0;
-  for (_key, value) in row_map.iter() {
-    let ref_key = value.to_string().to_snake_case();
-    if let Some(hk) = headers.get(h_index) {
-      let sn = hk.to_snake_case();
-      if sn == ref_key || sn.len() == 0 {
-        num_matched += 1;
-      }
+pub(crate) fn is_not_header_row(
+    row_map: &IndexMap<String, Value>,
+    row_index: usize,
+    headers: &[String],
+) -> bool {
+    if row_index > 0 {
+        return true;
     }
-    h_index += 1;
-  }
-  num_matched < headers.len()
+    let mut h_index = 0;
+    let mut num_matched: usize = 0;
+    for (_key, value) in row_map.iter() {
+        let ref_key = value.to_string().to_snake_case();
+        if let Some(hk) = headers.get(h_index) {
+            let sn = hk.to_snake_case();
+            if sn == ref_key || sn.len() == 0 {
+                num_matched += 1;
+            }
+        }
+        h_index += 1;
+    }
+    num_matched < headers.len()
 }
 
 #[cfg(test)]
 mod tests {
-    use simple_string_patterns::ToStrings;
 
     use crate::Format;
 
@@ -135,25 +140,21 @@ mod tests {
 
     #[test]
     fn test_cell_letters_1() {
-
         assert_eq!(to_a1_col_key(26), "aa");
     }
 
     #[test]
     fn test_cell_letters_2() {
-
         assert_eq!(to_a1_col_key(701), "zz");
     }
 
     #[test]
     fn test_cell_letters_3() {
-
         assert_eq!(to_a1_col_key(702), "aaa");
     }
 
     #[test]
     fn test_cell_letters_4() {
-
         assert_eq!(to_c01_col_key(8, 60), "c09");
     }
 
@@ -170,10 +171,16 @@ mod tests {
     #[test]
     fn test_first_row() {
         // header labels as captured from the top row
-        let first_row = ["Viscosity", "Rating", "", ""].to_strings();
+        let first_row = ["Viscosity", "Rating", "", ""].map(|s| s.to_string());
         let cols = vec![
             Column::from_key_ref_with_format(None, Format::Float, None, false, false),
-            Column::from_key_ref_with_format(Some("points"), Format::Decimal(3), None, false, false),
+            Column::from_key_ref_with_format(
+                Some("points"),
+                Format::Decimal(3),
+                None,
+                false,
+                false,
+            ),
             Column::from_key_ref_with_format(Some("adjusted"), Format::Float, None, false, false),
         ];
         let headers = build_header_keys(&first_row, &cols, &FieldNameMode::AutoA1);
@@ -190,8 +197,8 @@ mod tests {
     #[test]
     fn test_headers_a1_override() {
         // header labels as captured from the top row
-        let first_row = ["Viscosity", "Rating", "Weighted", "Class"].to_strings();
-        
+        let first_row = ["Viscosity", "Rating", "Weighted", "Class"].map(|s| s.to_string());
+
         let headers = build_a1_headers(&first_row);
         // should be lower-cased as `viscosity`
         assert_eq!(headers.get(0).unwrap(), "a");
@@ -202,8 +209,16 @@ mod tests {
     #[test]
     fn test_headers_c01_override() {
         // build header row with 200 sequential alphanumeric values
-        let first_row: Vec<String> = (0..200).map(|x| [char::from_u32(65 + (x % 26)).unwrap_or('_').to_string(), (x * 3 * 1).to_string()].concat()).collect();
-        
+        let first_row: Vec<String> = (0..200)
+            .map(|x| {
+                [
+                    char::from_u32(65 + (x % 26)).unwrap_or('_').to_string(),
+                    (x * 3 * 1).to_string(),
+                ]
+                .concat()
+            })
+            .collect();
+
         let headers = build_c01_headers(&first_row);
         // the column should be c0001
         assert_eq!(headers.get(0).unwrap(), "c001");

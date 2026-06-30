@@ -16,7 +16,7 @@ use crate::euro_number_format::is_euro_number_format;
 use crate::headers::*;
 use crate::helpers::float_value;
 use crate::helpers::string_value;
-use crate::is_truthy::*;
+use is_truthy::*;
 use crate::round_decimal::RoundDecimal;
 use crate::Extension;
 use crate::Format;
@@ -148,7 +148,8 @@ async fn read_multiple_worksheets(
         let mut headers: Vec<String> = vec![];
         let mut has_headers = false;
         let capture_headers = !opts.omit_header;
-        let mut rows: Vec<IndexMap<String, Value>> = vec![];
+        let mut rows: Vec<IndexMap<String, Value>> =
+            Vec::with_capacity(if capture_rows { max_rows } else { 0 });
         let mut row_index = 0;
         let header_row_index = opts.header_row_index();
         let mut col_keys: Vec<String> = vec![];
@@ -220,7 +221,8 @@ pub async fn read_single_worksheet(
     let mut col_keys: Vec<String> = vec![];
     let mut has_headers = false;
     let capture_headers = !opts.omit_header;
-    let mut rows: Vec<IndexMap<String, Value>> = vec![];
+    let mut rows: Vec<IndexMap<String, Value>> =
+        Vec::with_capacity(if capture_rows { max_rows } else { 0 });
     let mut row_index = 0;
     let header_row_index = opts.header_row_index();
     let match_header_row_below = capture_headers && header_row_index > 0;
@@ -265,15 +267,21 @@ pub async fn read_single_worksheet(
     }
     if let Some(save_method) = save_opt {
         let mut row_iter = range.rows();
+        let mut save_count: usize = 0;
         if let Some(first_row) = row_iter.next() {
             let first_row_map = workbook_row_to_map(first_row, &opts.rows, &headers);
             if is_not_header_row(&first_row_map, 0, &col_keys) {
                 save_method(first_row_map)?;
+                save_count += 1;
             }
         }
         for row in row_iter {
+            if save_count >= max_rows {
+                break;
+            }
             let row_map = workbook_row_to_map(row, &opts.rows, &headers);
             save_method(row_map)?;
+            save_count += 1;
         }
     }
 
@@ -300,13 +308,14 @@ pub async fn read_csv_core<'a>(
         .from_path(path_data.path())
     {
         let capture_header = opts.omit_header == false;
-        let mut rows: Vec<IndexMap<String, Value>> = vec![];
+        let capture_rows = opts.capture_rows();
+        let max_line_usize = opts.max_rows();
+        let mut rows: Vec<IndexMap<String, Value>> =
+            Vec::with_capacity(if capture_rows { max_line_usize } else { 0 });
         let mut line_count = 0;
         let has_max = opts.max.is_some();
 
-        let max_line_usize = opts.max_rows();
         let mut headers: Vec<String> = vec![];
-        let capture_rows = opts.capture_rows();
         if capture_header {
             if let Ok(hdrs) = rdr.headers() {
                 headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
@@ -358,15 +367,16 @@ fn workbook_row_to_map(
     opts: &RowOptionSet,
     headers: &[String],
 ) -> IndexMap<String, Value> {
-    to_index_map(&workbook_row_to_values(row, &opts), headers)
+    to_index_map(&workbook_row_to_values(row, opts), headers)
 }
 
 // Convert an array of row data to a vector of serde_json::Value objects
 fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
+    let opts_arc = Arc::new(opts);
     let mut c_index = 0;
     let mut cells: Vec<Value> = vec![];
     for cell in row {
-        let value = workbook_cell_to_value(cell, Arc::new(opts), c_index);
+        let value = workbook_cell_to_value(cell, opts_arc.clone(), c_index);
         cells.push(value);
         c_index += 1;
     }
@@ -431,10 +441,10 @@ fn process_iso_datetime_value(dt_str: &str, def_val: Option<Value>, date_only: b
 
 fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> Value {
     match format {
-        Format::Boolean => process_truthy_value(value, def_val, is_truthy_core),
-        Format::Truthy => process_truthy_value(value, def_val, is_truthy_standard),
+        Format::Boolean => process_truthy_value(value, def_val, |v, ef| v.is_truthy_core(ef)),
+        Format::Truthy => process_truthy_value(value, def_val, |v, ef| v.is_truthy_standard(ef)),
         Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| {
-            is_truthy_custom(v, &opts, false, false)
+            v.is_truthy_custom(&opts, false, false)
         }),
         Format::Decimal(places) => {
             process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places)))
@@ -540,12 +550,12 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
                 }
             }
         }
-    } else if let Some(is_true) = is_truthy_core(cell, false) {
+    } else if let Some(is_true) = cell.is_truthy_core(false) {
         new_cell = Value::Bool(is_true);
     } else {
         new_cell = match fmt {
             Format::Truthy => {
-                if let Some(is_true) = is_truthy_standard(cell, false) {
+                if let Some(is_true) = cell.is_truthy_standard(false) {
                     Value::Bool(is_true)
                 } else {
                     Value::Null
@@ -700,7 +710,34 @@ mod tests {
         let sample_path = "data/sample-data-1.xlsx";
         let path_data = PathData::new(path::Path::new(sample_path));
         let info = read_workbook_sheet_info(&path_data).await;
-        println!("{:?}", info);
         assert!(info.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_large_csv_file() {
+        let sample_path = "data/large-datasheet.csv";
+        let max_rows = 100_000;
+        let opts = OptionSet::new(sample_path).max_row_count(max_rows);
+        let result = process_spreadsheet_core(&opts, None, None).await;
+        if let Ok(data) = result.clone() {
+            assert_eq!(data.data.first_sheet().len(), max_rows as usize);
+        } else {
+            panic!("Failed to process large CSV file");
+        }
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_medium_excel_file() {
+        let sample_path = "data/medium-spreadsheet-50_000.xlsx";
+        let max_rows = 5_000;
+        let opts = OptionSet::new(sample_path).max_row_count(max_rows);
+        let result = process_spreadsheet_core(&opts, None, None).await;
+        if let Ok(data) = result.clone() {
+            assert_eq!(data.data.first_sheet().len(), max_rows as usize);
+        } else {
+            panic!("Failed to process large Excel file");
+        }
+        assert!(result.is_ok());
     }
 }

@@ -1,10 +1,11 @@
 use heck::ToSnakeCase;
 use indexmap::IndexMap;
 use serde_json::{json, Error, Value};
-use simple_string_patterns::{SimpleMatch, StripCharacters, ToSegments};
+use simple_string_patterns::{SimpleMatch, StripCharacters};
+use to_segments::ToSegments;
 use std::{path::Path, str::FromStr, sync::Arc};
 
-use crate::is_truthy::{extract_truth_patterns, to_truth_options, TruthyOption};
+use is_truthy::{extract_truth_patterns, to_truth_options, MatchMode, TruthyOption};
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
@@ -410,7 +411,7 @@ impl FromStr for Format {
           if let Some(str) = match_custom_dt(key) {
             Self::DateTimeCustom(Arc::from(str))
           } else if let Some((yes, no)) = match_custom_truthy(key) {
-            Self::TruthyCustom(to_truth_options(&yes, &no, false,false))
+            Self::TruthyCustom(to_truth_options(&yes, &no, false, MatchMode::Exact))
           } else {
             Self::Auto
           }
@@ -431,11 +432,13 @@ fn match_custom_dt(key: &str) -> Option<String> {
 
 fn match_custom_truthy(key: &str) -> Option<(String,String)> {
   let test_str = key.trim();
-  let (head, tail) = test_str.to_head_tail(":");
-  if tail.len() > 1 && head.len() > 1 && head.starts_with_ci("tr") {
-    let (yes, no) = tail.to_head_tail(",");
-    if yes.len() > 0 && no.len() > 0 {
-      return Some((yes, no));
+  if let (Some(head), Some(tail)) = test_str.to_head_tail(":") {
+    if tail.len() > 1 && head.len() > 1 && head.starts_with_ci("tr") {
+      if let (Some(yes), Some(no)) = tail.to_head_tail(",") {
+        if !yes.is_empty() && !no.is_empty() {
+          return Some((yes.to_string(), no.to_string()));
+        }
+      }
     }
   }
   None
@@ -444,7 +447,7 @@ fn match_custom_truthy(key: &str) -> Option<(String,String)> {
 impl Format {
   #[allow(dead_code)]
   pub fn truthy_custom(yes: &str, no: &str) -> Self {
-    Format::TruthyCustom(to_truth_options(yes, no, false, false))
+    Format::TruthyCustom(to_truth_options(yes, no, false, MatchMode::Exact))
   }
 }
 

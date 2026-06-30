@@ -8,6 +8,10 @@ categories = ["data-structures", "parsing", "text-processing"]
 license = "GPL-2.0-or-later WITH Bison-exception-2.2"
 
 [dependencies]
+alphanumeric = { path = "../alphanumeric" }
+is_truthy = { path = "../is_truthy" }
+simple-string-patterns = { path = "../simple-string-patterns" }
+to_segments = "^0.0.2"
 calamine = { version = "0.35.0", features = ["chrono", "dates"] }
 chrono = "^0.4.39"
 csv = "1.4.0"
@@ -16,5 +20,4 @@ heck = "0.5.0"
 indexmap = { version = "^2.14.0", features = ["serde"] }
 serde = { version = "^1.0.228", features = ["derive", "serde_derive"] }
 serde_json = { version = "^1.0.149", features = ["preserve_order"] }
-simple-string-patterns = "^0.3.16"
 tokio = { version = ">=1.42.0, <2.0.0", features = ["full"] }

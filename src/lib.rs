@@ -3,7 +3,7 @@ pub mod headers;
 pub mod data_set;
 pub mod reader;
 pub mod euro_number_format;
-pub mod is_truthy;
+pub use is_truthy;
 pub mod helpers;
 pub mod round_decimal;
 pub mod error;
@@ -19,7 +19,6 @@ pub use tokio;
 pub use heck;
 // reexported to deconstruct Value objects
 pub use serde_json;
-// reexported to deconstruct Value objects
 pub use simple_string_patterns;
 pub use indexmap;
 // reexported to facilitate post processing and error handling without adding it separately
