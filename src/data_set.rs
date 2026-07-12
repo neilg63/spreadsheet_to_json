@@ -216,7 +216,7 @@ impl ResultSet {
   pub fn rows(&self) -> Vec<String> {
     let sheet = self.data.first_sheet();
     let mut lines = Vec::with_capacity(sheet.len());
-    for row in &self.data.first_sheet() {
+    for row in &sheet {
       lines.push(json!(row).to_string());
     }
     lines

@@ -475,9 +475,9 @@ impl Column {
   /// build new column data type override and optional default
   pub fn from_json(json: &Value) -> Self {
     let key_opt = json.get("key").map(|v| v.as_str().unwrap_or(""));
-    let fmt = match json.get("format") {
-      Some(fmt_val) => {
-        match Format::from_str(fmt_val.as_str().unwrap()) {
+    let fmt = match json.get("format").and_then(|v| v.as_str()) {
+      Some(fmt_str) => {
+        match Format::from_str(fmt_str) {
           Ok(fmt) => fmt,
           Err(_) => Format::Auto
         }

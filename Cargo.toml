@@ -8,7 +8,7 @@ categories = ["data-structures", "parsing", "text-processing"]
 license = "MIT"
 
 [dependencies]
-alphanumeric = { version = "0.1.0", features = ["cell_analysis"] }
+alphanumeric = { version = "0.2.0", features = ["cell_analysis"] }
 is-truthy = "0.1.1"
 simple-string-patterns = "0.4.0"
 to_segments = "^0.1.2"

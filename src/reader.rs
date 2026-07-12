@@ -312,7 +312,6 @@ pub async fn read_csv_core<'a>(
         let mut rows: Vec<IndexMap<String, Value>> =
             Vec::with_capacity(if capture_rows { max_line_usize } else { 0 });
         let mut line_count = 0;
-        let has_max = opts.max.is_some();
 
         let mut headers: Vec<String> = vec![];
         if capture_header {
@@ -324,12 +323,13 @@ pub async fn read_csv_core<'a>(
         }
 
         let mut total = 0;
+        let opts_rows_arc = Arc::new(&opts.rows);
         if capture_rows {
             for result in rdr.records() {
-                if has_max && line_count >= max_line_usize {
+                if line_count >= max_line_usize {
                     break;
                 }
-                if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
+                if let Some(row) = csv_row_result_to_values(result, opts_rows_arc.clone()) {
                     rows.push(to_index_map(&row, &headers));
                     line_count += 1;
                 }
@@ -337,7 +337,7 @@ pub async fn read_csv_core<'a>(
             total = line_count + rdr.records().count() + 1;
         } else if let Some(save_method) = save_opt {
             for result in rdr.records() {
-                if let Some(row) = csv_row_result_to_values(result, Arc::new(&opts.rows)) {
+                if let Some(row) = csv_row_result_to_values(result, opts_rows_arc.clone()) {
                     let row_map = to_index_map(&row, &headers);
                     save_method(row_map)?;
                     total += 1;
@@ -443,7 +443,7 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
         Format::Boolean => process_truthy_value(value, def_val, |v, ef| v.is_truthy_core(ef)),
         Format::Truthy => process_truthy_value(value, def_val, |v, ef| v.is_truthy_standard(ef)),
         Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| {
-            v.is_truthy_custom(&TruthyRuleSet::from(opts.clone()))
+            v.is_truthy_custom(&opts)
         }),
         Format::Decimal(places) => {
             process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places)))
@@ -511,15 +511,10 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
     let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric
     let col = opts.column(index);
-    let fmt = if let Some(c) = col.cloned() {
-        c.format
+    let (fmt, euro_num_mode) = if let Some(c) = col {
+        (c.format.clone(), c.decimal_comma)
     } else {
-        Format::Auto
-    };
-    let euro_num_mode = if let Some(c) = col.cloned() {
-        c.decimal_comma
-    } else {
-        opts.decimal_comma
+        (Format::Auto, opts.decimal_comma)
     };
     let num_cell = if has_number {
         let euro_num_mode = uses_decimal_comma(cell, euro_num_mode);
@@ -570,15 +565,11 @@ pub async fn read_workbook_sheet_info<'a>(
     path_data: &PathData<'a>,
 ) -> Result<IndexMap<String, usize>, GenericError> {
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
-        let sheets = workbook.sheet_names().into_iter().map(|m| {
-            (
-                m.to_string(),
-                workbook.worksheet_range(&m).unwrap().rows().count(),
-            )
-        });
         let mut im: IndexMap<String, usize> = IndexMap::new();
-        for (name, count) in sheets {
-            im.insert(name, count);
+        for name in workbook.sheet_names() {
+            if let Ok(range) = workbook.worksheet_range(&name) {
+                im.insert(name, range.rows().count());
+            }
         }
         Ok(im)
     } else {

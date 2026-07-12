@@ -29,15 +29,15 @@ pub fn json_object_to_calamine_data(json: Value) -> Vec<Data> {
 }
 
 pub fn json_array_to_indexmaps(json: Value) -> Vec<IndexMap<String, Value>> {
-    json.as_array().unwrap().iter()
+    json.as_array().map(|arr| arr.iter()
     .map(|v| v.to_owned()).filter_map(json_object_to_indexmap)
-    .collect()
+    .collect()).unwrap_or_default()
 }
 
 pub fn json_array_to_calamine_rows(json: Value) -> Vec<Vec<Data>> {
-  json.as_array().unwrap().iter()
+  json.as_array().map(|arr| arr.iter()
   .map(|v| v.to_owned()).map(json_object_to_calamine_data)
-  .collect()
+  .collect()).unwrap_or_default()
 }
 
 pub fn float_value(value: f64) -> Value {
