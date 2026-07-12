@@ -2,7 +2,6 @@ pub mod options;
 pub mod headers;
 pub mod data_set;
 pub mod reader;
-pub mod euro_number_format;
 pub use is_truthy;
 pub mod helpers;
 pub mod round_decimal;

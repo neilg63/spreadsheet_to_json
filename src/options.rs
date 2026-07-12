@@ -5,7 +5,7 @@ use simple_string_patterns::{SimpleMatch, StripCharacters};
 use to_segments::ToSegments;
 use std::{path::Path, str::FromStr, sync::Arc};
 
-use is_truthy::{extract_truth_patterns, to_truth_options, MatchMode, TruthyOption};
+use is_truthy::TruthyRuleSet;
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
@@ -362,7 +362,7 @@ pub enum Format {
   DateTimeCustom(Arc<str>),
   Truthy, // interpret common yes/no, y/n, true/false text strings as true/false
   #[allow(dead_code)]
-  TruthyCustom(Vec<TruthyOption>) // define custom yes/no values
+  TruthyCustom(TruthyRuleSet) // define custom yes/no values
 }
 
 impl ToString for Format {
@@ -378,9 +378,9 @@ impl ToString for Format {
       Self::DateTime => "datetime",
       Self::DateTimeCustom(fmt) => &format!("datetime({})", fmt),
       Self::Truthy => "truthy",
-      Self::TruthyCustom(opts) => {
-        let true_str: Vec<String> = extract_truth_patterns(&opts, true);
-        let false_str: Vec<String> = extract_truth_patterns(&opts, false);
+      Self::TruthyCustom(rules) => {
+        let true_str: Vec<String> = rules.true_options().iter().map(|o| o.pattern().to_string()).collect();
+        let false_str: Vec<String> = rules.false_options().iter().map(|o| o.pattern().to_string()).collect();
         &format!("truthy({},{})", true_str.join("|"), false_str.join("|"))
       },
     };
@@ -411,7 +411,7 @@ impl FromStr for Format {
           if let Some(str) = match_custom_dt(key) {
             Self::DateTimeCustom(Arc::from(str))
           } else if let Some((yes, no)) = match_custom_truthy(key) {
-            Self::TruthyCustom(to_truth_options(&yes, &no, false, MatchMode::Exact))
+            Self::TruthyCustom(TruthyRuleSet::new().add_true(&yes).add_false(&no))
           } else {
             Self::Auto
           }
@@ -447,7 +447,7 @@ fn match_custom_truthy(key: &str) -> Option<(String,String)> {
 impl Format {
   #[allow(dead_code)]
   pub fn truthy_custom(yes: &str, no: &str) -> Self {
-    Format::TruthyCustom(to_truth_options(yes, no, false, MatchMode::Exact))
+    Format::TruthyCustom(TruthyRuleSet::new().add_true(yes).add_false(no))
   }
 }
 

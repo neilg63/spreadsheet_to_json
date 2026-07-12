@@ -3,7 +3,6 @@ use csv::{ReaderBuilder, StringRecord};
 use heck::ToSnakeCase;
 use indexmap::IndexMap;
 use serde_json::{Number, Value};
-use simple_string_patterns::*;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -12,7 +11,7 @@ use std::sync::Arc;
 
 use crate::data_set::*;
 use crate::error::GenericError;
-use crate::euro_number_format::is_euro_number_format;
+use alphanumeric::*;
 use crate::headers::*;
 use crate::helpers::float_value;
 use crate::helpers::string_value;
@@ -444,7 +443,7 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
         Format::Boolean => process_truthy_value(value, def_val, |v, ef| v.is_truthy_core(ef)),
         Format::Truthy => process_truthy_value(value, def_val, |v, ef| v.is_truthy_standard(ef)),
         Format::TruthyCustom(opts) => process_truthy_value(value, def_val, |v, _| {
-            v.is_truthy_custom(&opts, false, false)
+            v.is_truthy_custom(&TruthyRuleSet::from(opts.clone()))
         }),
         Format::Decimal(places) => {
             process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places)))
@@ -523,7 +522,7 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
         opts.decimal_comma
     };
     let num_cell = if has_number {
-        let euro_num_mode = is_euro_number_format(cell, euro_num_mode);
+        let euro_num_mode = uses_decimal_comma(cell, euro_num_mode);
         if euro_num_mode {
             cell.replace(",", ".").replace(",", ".")
         } else {
