@@ -6,7 +6,7 @@
 
 ## Convert Spreadsheets and CSV files to jSON
 
-#### NB: This crate is still in alpha, see [alpha version history below](#version-history).
+#### Battle-tested with spreadsheets under 10MB; recent releases handle much larger files. See [version history below](#version-history).
 
 This library crate provides the core functions to convert common spreadsheet and CSV files into JSON or JSONL (JSON Lines) either directly or asynchronously.
 
@@ -36,7 +36,7 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 
 - `.max_row_count(max: u32)`: overrides the default max row count of 10,000. Use this is direct mode or to return only the first *n* rows.
 - `.header_row(index: u8)` overrides the default header row index of 0, useful for spreadsheets with a title and notes on top
-- `.omit_header(index: u8)` omit the header altogether and assign default *A1-style* keys or column numbers.
+- `.omit_header()` omit the header altogether and assign default *A1-style* keys or column numbers.
 - `.sheet_index(index: u32)` zero-based sheer index. Any value over zero will override the specified sheet name.
 - `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
 - `.read_mode_async()` Defer processing of rows with a callback in the second argument in render_spreadsheet_async() 
@@ -196,45 +196,9 @@ fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_i
   .map_err(|_| GenericError("database_error"))?;
   Ok(())
 }
-
-// Save function called in a closure for each row with a database connection and data_id from the outer scope
-fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_id: u32) -> Result<(), GenericError> {
-    let mut row_struct = CustomTableStruct {
-    id: None,
-    data_id: data_id, // or whatever ID setting logic you have
-    field1: None,
-    field2: None,
-    // ... set other fields to None or default values
-  };
-  
-  for (key, value) in row {
-    match key.as_str() {
-        "field1" => {
-            if let Value::String(s) = value {
-                row_struct.field1 = Some(s.clone());
-            }
-        },
-        "field2" => {
-            if let Value::Number(n) = value {
-                if let Some(i) = n.as_i64() {
-                    row_struct.field2 = Some(i as i32);
-                }
-            }
-        },
-        // Add other field mappings here
-        _ => {} // Ignore unknown keys
-    }
-  }
-  diesel::insert_into("data_rows")
-  .values(&row_struct)
-  .execute(connection)
-  .map_err(|_| GenericError("database_error"))?;
-  Ok(())
-}
 ```
 
-## Alpha Version History <a id="version-history"></a>
-This crate is still alpha and likely to undergo breaking changes as it's part of larger data import project. I do not expect a stable version before mid January when it has been battle-tested.
+## Version History <a id="version-history"></a>
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
 - **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
 - **0.1.4** Added support for the Excel Binary format (.xlsb)
@@ -242,3 +206,4 @@ This crate is still alpha and likely to undergo breaking changes as it's part of
 - **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become. You should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
 - **0.1.7** Added support for multiple worksheets in preview mode and refined output options
 - **0.1.10** Reviewed date-time parsing options for Excel and OpenDocument spreadsheets. Reorganised cell post-processors by detected data-type.
+- **0.2.0** Bumped `calamine` to 0.36.0. Switched `is-truthy`, `alphanumeric` and `simple-string-patterns` from local path dependencies to their published crates.io versions — `is-truthy` gained a `TruthyRuleSet` builder (`options()`/`true_options()`/`false_options()`, replacing the old `TruthyOption` vector plumbing). Fixed the CSV reader silently ignoring its own default row cap (`DEFAULT_MAX_ROWS`) when no explicit `.max_row_count()` was set — large uploads could load unbounded into memory. Fixed a panic in `Column::from_json` on a non-string `format` field. Assorted performance fixes: redundant `Column`/`Format` clones per cell, a fresh `Arc` allocated per CSV row instead of once per file, a double clone in `ResultSet::rows()`. Fixed a panic in `read_workbook_sheet_info` on an unreadable individual sheet.
