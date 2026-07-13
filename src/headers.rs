@@ -97,6 +97,42 @@ pub fn build_header_keys(
     headers
 }
 
+/// The natural (un-overridden) key for each column, exactly as build_header_keys would
+/// derive it with no column overrides at all. Used as the matching target for column
+/// overrides that reference a column by its source_key rather than by position.
+pub fn natural_column_keys(first_row: &[String], field_mode: &FieldNameMode) -> Vec<String> {
+    build_header_keys(first_row, &[], field_mode)
+}
+
+/// Resolve a (possibly unordered, possibly sparse) list of column overrides against a
+/// sheet's natural header keys, producing one Column per natural column, aligned by index.
+///
+/// Overrides with a `source_key` are matched by name against the natural keys wherever
+/// that column actually is, regardless of the override's position in `columns` — this is
+/// what lets a caller override just one field out of many (e.g. `weight_kg -> weight`)
+/// without needing to enumerate every column ahead of it. Overrides with no `source_key`
+/// keep applying positionally instead, exactly as before, for backward compatibility with
+/// direct library use.
+pub fn resolve_columns(columns: &[Column], natural_keys: &[String]) -> Vec<Column> {
+    let mut resolved: Vec<Column> = natural_keys.iter().map(|_| Column::new(None)).collect();
+    for (i, col) in columns.iter().enumerate() {
+        if col.source_key.is_none() {
+            if let Some(slot) = resolved.get_mut(i) {
+                *slot = col.clone();
+            }
+        }
+    }
+    for col in columns {
+        if let Some(src) = &col.source_key {
+            let target = src.to_snake_case();
+            if let Some(idx) = natural_keys.iter().position(|k| k.to_snake_case() == target) {
+                resolved[idx] = col.clone();
+            }
+        }
+    }
+    resolved
+}
+
 /// Assign keys with A1+ notation
 pub fn build_a1_headers(first_row: &[String]) -> Vec<String> {
     build_header_keys(first_row, &[], &FieldNameMode::A1)
@@ -166,6 +202,74 @@ mod tests {
     #[test]
     fn test_cell_letters_6() {
         assert_eq!(to_c01_col_key(20, 2000), "c0021");
+    }
+
+    #[test]
+    fn test_resolve_columns_matches_by_source_key_regardless_of_position() {
+        // "full_name,height_cm,weight_kg" -- override only weight_kg, out of order and
+        // without needing to pad the other two columns with empty entries.
+        let first_row = ["full_name", "height_cm", "weight_kg"].map(|s| s.to_string());
+        let natural_keys = natural_column_keys(&first_row, &FieldNameMode::AutoA1);
+        assert_eq!(natural_keys, vec!["full_name", "height_cm", "weight_kg"]);
+
+        let overrides = vec![
+            Column::from_source_key_with_format("weight_kg", Some("weight"), Format::Integer, None, false, false),
+        ];
+        let resolved = resolve_columns(&overrides, &natural_keys);
+        assert_eq!(resolved.len(), 3);
+        // untouched columns keep their natural key and Format::Auto
+        assert!(resolved[0].key.is_none());
+        assert!(resolved[1].key.is_none());
+        // the matched column picked up the override regardless of its position in `overrides`
+        assert_eq!(resolved[2].key_name(), "weight");
+        assert_eq!(resolved[2].format.to_string(), "integer");
+
+        let headers = build_header_keys(&first_row, &resolved, &FieldNameMode::AutoA1);
+        assert_eq!(headers, vec!["full_name", "height_cm", "weight"]);
+    }
+
+    #[test]
+    fn test_resolve_columns_source_key_match_is_snake_cased() {
+        // The source key is matched against the natural snake_cased header, so it
+        // doesn't need to be typed in exactly the same casing/spacing as the header.
+        let first_row = ["Weight (Kg)".to_string()];
+        let natural_keys = natural_column_keys(&first_row, &FieldNameMode::AutoA1);
+        assert_eq!(natural_keys, vec!["weight_kg"]);
+
+        let overrides = vec![
+            Column::from_source_key_with_format("Weight Kg", Some("weight"), Format::Auto, None, false, false),
+        ];
+        let resolved = resolve_columns(&overrides, &natural_keys);
+        assert_eq!(resolved[0].key_name(), "weight");
+    }
+
+    #[test]
+    fn test_resolve_columns_unmatched_source_key_is_a_no_op() {
+        let first_row = ["full_name", "height_cm"].map(|s| s.to_string());
+        let natural_keys = natural_column_keys(&first_row, &FieldNameMode::AutoA1);
+        let overrides = vec![
+            Column::from_source_key_with_format("nonexistent_field", Some("oops"), Format::Auto, None, false, false),
+        ];
+        let resolved = resolve_columns(&overrides, &natural_keys);
+        // no column matched "nonexistent_field", so nothing changes -- silently ignored
+        assert!(resolved[0].key.is_none());
+        assert!(resolved[1].key.is_none());
+    }
+
+    #[test]
+    fn test_resolve_columns_still_supports_positional_overrides() {
+        // Columns with no source_key keep applying by position, for backward
+        // compatibility with direct library use.
+        let first_row = ["a", "b", "c"].map(|s| s.to_string());
+        let natural_keys = natural_column_keys(&first_row, &FieldNameMode::AutoA1);
+        let overrides = vec![
+            Column::new(Some("first")),
+            Column::new(Some("second")),
+        ];
+        let resolved = resolve_columns(&overrides, &natural_keys);
+        assert_eq!(resolved[0].key_name(), "first");
+        assert_eq!(resolved[1].key_name(), "second");
+        assert!(resolved[2].key.is_none());
     }
 
     #[test]

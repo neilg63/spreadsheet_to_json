@@ -157,9 +157,13 @@ async fn read_multiple_worksheets(
         } else {
             vec![]
         };
+        let mut resolved_row_opts = opts.rows.clone();
         let match_header_row_below = capture_headers && header_row_index > 0;
         if let Some(first_row) = range.headers() {
-            headers = build_header_keys(&first_row, &columns, &opts.field_mode);
+            let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+            let resolved_columns = resolve_columns(&columns, &natural_keys);
+            headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+            resolved_row_opts.columns = resolved_columns;
             has_headers = !match_header_row_below;
             col_keys = first_row;
         }
@@ -184,10 +188,13 @@ async fn read_multiple_worksheets(
                         .into_iter()
                         .map(|c| c.to_string().to_snake_case())
                         .collect::<Vec<String>>();
-                    headers = build_header_keys(&h_row, &columns, &opts.field_mode);
+                    let natural_keys = natural_column_keys(&h_row, &opts.field_mode);
+                    let resolved_columns = resolve_columns(&columns, &natural_keys);
+                    headers = build_header_keys(&h_row, &resolved_columns, &opts.field_mode);
+                    resolved_row_opts.columns = resolved_columns;
                     has_headers = true;
                 } else if (has_headers || !capture_headers) && capture_rows {
-                    let row_map = workbook_row_to_map(row, &opts.rows, &headers);
+                    let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                     if is_not_header_row(&row_map, row_index, &col_keys) {
                         rows.push(row_map);
                     }
@@ -225,9 +232,13 @@ pub async fn read_single_worksheet(
     let mut row_index = 0;
     let header_row_index = opts.header_row_index();
     let match_header_row_below = capture_headers && header_row_index > 0;
+    let mut resolved_row_opts = opts.rows.clone();
 
     if let Some(first_row) = range.headers() {
-        headers = build_header_keys(&first_row, &columns, &opts.field_mode);
+        let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+        let resolved_columns = resolve_columns(&columns, &natural_keys);
+        headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+        resolved_row_opts.columns = resolved_columns;
         has_headers = !match_header_row_below;
         col_keys = first_row;
     }
@@ -252,11 +263,14 @@ pub async fn read_single_worksheet(
                     .into_iter()
                     .map(|c| c.to_string().to_snake_case())
                     .collect::<Vec<String>>();
-                headers = build_header_keys(&h_row, &columns, &opts.field_mode);
+                let natural_keys = natural_column_keys(&h_row, &opts.field_mode);
+                let resolved_columns = resolve_columns(&columns, &natural_keys);
+                headers = build_header_keys(&h_row, &resolved_columns, &opts.field_mode);
+                resolved_row_opts.columns = resolved_columns;
                 has_headers = true;
             } else if (has_headers || !capture_headers) && capture_rows {
                 // only capture rows if headers are either omitted or have already been captured
-                let row_map = workbook_row_to_map(row, &opts.rows, &headers);
+                let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                 if is_not_header_row(&row_map, row_index, &col_keys) {
                     rows.push(row_map);
                 }
@@ -268,7 +282,7 @@ pub async fn read_single_worksheet(
         let mut row_iter = range.rows();
         let mut save_count: usize = 0;
         if let Some(first_row) = row_iter.next() {
-            let first_row_map = workbook_row_to_map(first_row, &opts.rows, &headers);
+            let first_row_map = workbook_row_to_map(first_row, &resolved_row_opts, &headers);
             if is_not_header_row(&first_row_map, 0, &col_keys) {
                 save_method(first_row_map)?;
                 save_count += 1;
@@ -278,7 +292,7 @@ pub async fn read_single_worksheet(
             if save_count >= max_rows {
                 break;
             }
-            let row_map = workbook_row_to_map(row, &opts.rows, &headers);
+            let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
             save_method(row_map)?;
             save_count += 1;
         }
@@ -314,16 +328,20 @@ pub async fn read_csv_core<'a>(
         let mut line_count = 0;
 
         let mut headers: Vec<String> = vec![];
+        let mut resolved_row_opts = opts.rows.clone();
         if capture_header {
             if let Ok(hdrs) = rdr.headers() {
                 headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
             }
             let columns = opts.rows.columns.clone();
-            headers = build_header_keys(&headers, &columns, &opts.field_mode);
+            let natural_keys = natural_column_keys(&headers, &opts.field_mode);
+            let resolved_columns = resolve_columns(&columns, &natural_keys);
+            headers = build_header_keys(&headers, &resolved_columns, &opts.field_mode);
+            resolved_row_opts.columns = resolved_columns;
         }
 
         let mut total = 0;
-        let opts_rows_arc = Arc::new(&opts.rows);
+        let opts_rows_arc = Arc::new(&resolved_row_opts);
         if capture_rows {
             for result in rdr.records() {
                 if line_count >= max_line_usize {
@@ -531,8 +549,14 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
         if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
             match fmt {
                 Format::Integer => {
-                    if let Some(int_val) = Number::from_i128(float_val.as_i128().unwrap_or(0)) {
-                        new_cell = Value::Number(int_val);
+                    // as_i128() only succeeds for Numbers that are already integer-valued
+                    // internally, so it silently yields 0 for any decimal value (e.g. "58.2")
+                    // via unwrap_or(0). Go through as_f64() and truncate instead, matching
+                    // the equivalent xlsx/ods cell conversion in process_float_value above.
+                    if let Some(f) = float_val.as_f64() {
+                        if let Some(int_val) = Number::from_i128(f as i128) {
+                            new_cell = Value::Number(int_val);
+                        }
                     }
                 }
                 Format::Boolean => {
@@ -596,6 +620,59 @@ mod tests {
 
         // The source file should have 1 header row and 400 data rows
         assert_eq!(result.unwrap().num_rows, 401);
+    }
+
+    #[test]
+    fn test_source_key_override_renames_and_reformats_without_position() {
+        // End-to-end: overriding just one field out of many by its natural key,
+        // without needing to enumerate/pad the columns ahead of it.
+        let sample_path = "data/sample-data-1.csv";
+        let mut opts = OptionSet::new(sample_path).max_row_count(2);
+        opts.rows.columns = vec![
+            Column::from_source_key_with_format("weight", Some("weight_lbs"), Format::Integer, None, false, false),
+        ];
+
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        // every other column keeps its natural, auto-detected name
+        assert!(result.keys.contains(&"id".to_string()));
+        assert!(result.keys.contains(&"first_name".to_string()));
+        assert!(result.keys.contains(&"weight_lbs".to_string()));
+        assert!(!result.keys.contains(&"weight".to_string()));
+
+        let rows = result.to_vec();
+        let first = rows.first().expect("at least one row");
+        assert!(first.get("weight_lbs").is_some());
+        assert!(first.get("weight").is_none());
+        assert_eq!(first.get("id").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_csv_cell_integer_format_truncates_decimal_values() {
+        // Regression test: Number::as_i128() only succeeds for already-integer-valued
+        // Numbers, so casting a decimal CSV cell like "58.2" to Format::Integer used to
+        // silently produce 0 via unwrap_or(0) instead of the truncated value.
+        let cols = vec![Column::new_format(Format::Integer, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        let opts_arc = Arc::new(&row_opts);
+        assert_eq!(csv_cell_to_json_value("58.2", opts_arc.clone(), 0), Value::Number(Number::from(58)));
+        assert_eq!(csv_cell_to_json_value("82.5", opts_arc.clone(), 0), Value::Number(Number::from(82)));
+        assert_eq!(csv_cell_to_json_value("100", opts_arc.clone(), 0), Value::Number(Number::from(100)));
+    }
+
+    #[test]
+    fn test_csv_cell_does_not_coerce_ids_to_booleans() {
+        // Regression test: these previously became `true`/`false` because their
+        // embedded digit run (e.g. "SKU001" -> "001" -> 1) was fuzzily extracted
+        // and matched against is_truthy_core's numeric range, even though the
+        // column has no boolean intent (Format::Auto, the default).
+        let row_opts = RowOptionSet::default();
+        let opts_arc = Arc::new(&row_opts);
+        assert_eq!(csv_cell_to_json_value("SKU001", opts_arc.clone(), 0), Value::String("SKU001".to_string()));
+        assert_eq!(csv_cell_to_json_value("A1", opts_arc.clone(), 0), Value::String("A1".to_string()));
+        assert_eq!(csv_cell_to_json_value("01/06/2024", opts_arc.clone(), 0), Value::String("01/06/2024".to_string()));
+        // literal boolean tokens should still be recognised
+        assert_eq!(csv_cell_to_json_value("true", opts_arc.clone(), 0), Value::Bool(true));
+        assert_eq!(csv_cell_to_json_value("false", opts_arc.clone(), 0), Value::Bool(false));
     }
 
     #[test]

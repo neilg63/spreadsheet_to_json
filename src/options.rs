@@ -454,6 +454,10 @@ impl Format {
 #[derive(Debug, Clone)]
 pub struct Column {
   pub key:  Option<Arc<str>>,
+  /// Natural (auto-detected, snake_cased) key to match this override against, regardless
+  /// of the column's actual position. When None, the column applies positionally instead
+  /// (matched by its index within the configured column list), as before.
+  pub source_key: Option<Arc<str>>,
   pub format: Format,
   pub default: Option<Value>,
   pub date_only: bool, // date only in Format::Auto mode with datetime objects
@@ -472,9 +476,19 @@ impl Column {
     Self::from_key_ref_with_format(None, fmt, default, false, false)
   }
 
+  /// build a column override matched by its natural (auto-detected) key rather than
+  /// by position, e.g. to rename and/or reformat a single field out of many without
+  /// needing to enumerate every column ahead of it.
+  pub fn from_source_key_with_format(source_key: &str, key_opt: Option<&str>, format: Format, default: Option<Value>, date_only: bool, decimal_comma: bool) -> Self {
+    let mut col = Self::from_key_ref_with_format(key_opt, format, default, date_only, decimal_comma);
+    col.source_key = Some(Arc::from(source_key));
+    col
+  }
+
   /// build new column data type override and optional default
   pub fn from_json(json: &Value) -> Self {
     let key_opt = json.get("key").map(|v| v.as_str().unwrap_or(""));
+    let source_key = json.get("source_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let fmt = match json.get("format").and_then(|v| v.as_str()) {
       Some(fmt_str) => {
         match Format::from_str(fmt_str) {
@@ -508,7 +522,11 @@ impl Column {
         break;
       }
     }
-    Column::from_key_ref_with_format(key_opt, fmt, default, date_only, decimal_comma)
+    if let Some(src) = source_key {
+      Column::from_source_key_with_format(src, key_opt, fmt, default, date_only, decimal_comma)
+    } else {
+      Column::from_key_ref_with_format(key_opt, fmt, default, date_only, decimal_comma)
+    }
 }
 
 
@@ -544,6 +562,7 @@ impl Column {
     }
     Column {
       key,
+      source_key: None,
       format,
       default,
       date_only,
@@ -555,9 +574,14 @@ impl Column {
     self.key.clone().unwrap_or(Arc::from("")).to_string()
   }
 
+  pub fn source_key_name(&self) -> String {
+    self.source_key.clone().unwrap_or(Arc::from("")).to_string()
+  }
+
   pub fn to_json(&self) -> Value {
     json!({
       "key": self.key_name(),
+      "source_key": self.source_key_name(),
       "format": self.format.to_string(),
       "default": self.default,
       "date_only": self.date_only,
@@ -581,13 +605,19 @@ impl Column {
     } else {
       ""
     };
+    let source_str = if self.source_key.is_some() {
+      format!(", matched from {}", self.source_key_name())
+    } else {
+      "".to_string()
+    };
     format!(
-      "\tkey {}, format {}{}{}{}",
+      "\tkey {}, format {}{}{}{}{}",
       self.key_name(),
       self.format.to_string(),
       def_string,
       date_only_str,
-      comma_str)
+      comma_str,
+      source_str)
   }
 
 }

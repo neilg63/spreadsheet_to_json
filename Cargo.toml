@@ -2,14 +2,14 @@
 name = "spreadsheet-to-json"
 description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as well as CSV and TSV files to JSON or JSONL"
 repository = "https://github.com/neilg63/spreadsheet_to_json"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 categories = ["data-structures", "parsing", "text-processing"]
 license = "MIT"
 
 [dependencies]
 alphanumeric = { version = "0.2.0", features = ["cell_analysis"] }
-is-truthy = "0.1.1"
+is-truthy = "0.1.2"
 simple-string-patterns = "0.4.0"
 to_segments = "^0.1.2"
 calamine = { version = "0.36.0", features = ["chrono", "dates"] }
@@ -21,3 +21,8 @@ indexmap = { version = "^2.14.0", features = ["serde"] }
 serde = { version = "^1.0.228", features = ["derive", "serde_derive"] }
 serde_json = { version = "^1.0.150", features = ["preserve_order"] }
 tokio = { version = ">=1.52.0, <2.0.0", features = ["full"] }
+
+# Local override while iterating on the CSV boolean-coercion fix; remove once
+# is-truthy 0.1.2 is published and this can resolve from crates.io again.
+[patch.crates-io]
+is-truthy = { path = "../is_truthy" }
