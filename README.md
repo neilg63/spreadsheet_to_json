@@ -15,6 +15,7 @@ It relies on the [Calamine](https://crates.io/crates/calamine) and [CSV](https:/
 It supports the following formats:
 
 - Excel 2007+ Workbook (*.xlsx*)
+- Excel 2007+ Macro-Enabled Workbook (*.xlsm*) -- read as plain data; macros are ignored
 - Excel 2007+ Binary (*.xlsb*)
 - Excel 97-2004 Legacy (*.xls*)
 - OpenDocument Spreadsheets (*.ods*) compatible with LibreOffice
@@ -41,7 +42,7 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
 - `.read_mode_async()` Defer processing of rows with a callback in the second argument in render_spreadsheet_async() 
 - `.json_lines()` Output will be rendered one json object per row.
-- `field_name_mode(system: &str, override_header: bool)`: use either A1 or C for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag.
+- `field_name_mode(system: &str, override_header: bool)`: use either A1 (`a`, `b`, ... `z`, `aa`, `ab`, ...) or C-prefixed zero-padded numbers (`c01`, `c02`, ...) for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag. The C-style padding width scales with the sheet's total column count, so keys still sort correctly regardless of width: `c01`..`c99` under 100 columns, `c001`..`c999` from 100 up to 1,000, `c0001`..`c9999` from 1,000 up to 10,000 (see `build_padded_col_key` in `headers.rs`).
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
 - `override_columns(cols: &[Value])` Lets you override column settings, represented here as an array of `serde_json::Value` key/value objects, where :
   - `key`: overrides the header key,
@@ -51,6 +52,8 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
      - `truthy` will cast common English-like abbreviations such as Y, Yes as true and N or No false
      - `truthy:true_key,false_key` lets you cast custom strings to true or false. If unmatched the field value will be null.
   - `default`: overrides the default value for empty cells.
+
+The C-style keys are prefixed with `c` rather than left as bare zero-padded numbers (`"001"`, `"002"`, ...) for two reasons: zero-padding alone guarantees the keys sort correctly as plain strings in virtually any programming language, and a bare numeric-looking string is a confusing choice for an object/map key -- it's easy to mistake for an array index, and some languages treat numeric-looking string keys specially. If you actually want positional access instead of keyed access, that's a one-liner in most languages regardless of how the keys are named -- in JavaScript, for example, `Object.values(row)` turns a row object into a plain array of its values in field order.
 
 #### To do
 More details of options to come.
@@ -208,3 +211,5 @@ fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_i
 - **0.1.10** Reviewed date-time parsing options for Excel and OpenDocument spreadsheets. Reorganised cell post-processors by detected data-type.
 - **0.2.0** Bumped `calamine` to 0.36.0. Switched `is-truthy`, `alphanumeric` and `simple-string-patterns` from local path dependencies to their published crates.io versions — `is-truthy` gained a `TruthyRuleSet` builder (`options()`/`true_options()`/`false_options()`, replacing the old `TruthyOption` vector plumbing). Fixed the CSV reader silently ignoring its own default row cap (`DEFAULT_MAX_ROWS`) when no explicit `.max_row_count()` was set — large uploads could load unbounded into memory. Fixed a panic in `Column::from_json` on a non-string `format` field. Assorted performance fixes: redundant `Column`/`Format` clones per cell, a fresh `Arc` allocated per CSV row instead of once per file, a double clone in `ResultSet::rows()`. Fixed a panic in `read_workbook_sheet_info` on an unreadable individual sheet.
 - **0.2.1** Bumped `is-truthy` to 0.1.2, fixing CSV cells like `"SKU001"` or a date starting `"01/..."` being silently coerced to the boolean `true`/`false` just because they contained an embedded `0` or `1`. Added `Column::source_key` (and `Column::from_source_key_with_format()`): a column override can now be matched by its natural, auto-detected key wherever that column actually is, instead of strictly by position — see `resolve_columns()`/`natural_column_keys()` in `headers.rs`. Overrides with no `source_key` still apply positionally, unchanged. Fixed `Format::Integer` on a CSV cell with a decimal value (e.g. `"58.2"`) silently producing `0` instead of the truncated integer.
+- **0.2.2** Fixed a per-column `Format::Date`/`Format::DateTime` override having no effect at all on real (non-string) datetime cells in xlsx/ods — only the row-wide `--date-only`-style default was ever consulted for `Data::DateTime`/`Data::DateTimeIso` cells, so casting a single datetime column to date-only silently did nothing; see `resolve_date_only()` in `reader.rs`. Fixed `is_not_header_row` misclassifying the header row as real data (leaking it into the output as a bogus extra row) whenever any column had a non-`Auto` `Format` — it used to compare the row's already-formatted values against the header text, and formatting the header row's own text (e.g. through a date or decimal parse) commonly turns it into `null` or something else that no longer matches; it now compares raw, un-coerced cell text instead. Both bugs affected the xlsx/ods path only, not CSV/TSV.
+- **0.2.3** Added `.xlsm` (macro-enabled Excel workbook) support. `.xlsm` uses the exact same OOXML container as `.xlsx` and `calamine` has always read both through its Xlsx reader, but this crate's own `Extension` enum only recognised the `.xlsx` extension, so `.xlsm` files were rejected before `calamine` ever got a chance to open them.

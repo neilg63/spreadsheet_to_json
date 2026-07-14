@@ -7,7 +7,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use crate::data_set::*;
 use crate::error::GenericError;
@@ -23,6 +22,9 @@ use crate::OptionSet;
 use crate::PathData;
 use crate::RowOptionSet;
 use fuzzy_datetime::{iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
+
+/// Callback invoked once per row when saving asynchronously (e.g. --deferred mode)
+pub type SaveRowFn = Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>;
 
 /// Output the result set with captured rows (up to the maximum allowed) directly.
 /// This is now synchronous and calls the asynchronous function using a runtime.
@@ -49,7 +51,7 @@ pub async fn render_spreadsheet_direct(opts: &OptionSet) -> Result<ResultSet, Ge
 /// Output the result set with deferred row saving and optional output reference
 pub async fn process_spreadsheet_async(
     opts: &OptionSet,
-    save_func: Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
+    save_func: SaveRowFn,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     process_spreadsheet_core(opts, Some(save_func), out_ref).await
@@ -59,9 +61,7 @@ pub async fn process_spreadsheet_async(
 /// with optional asynchronous row save method and output reference
 pub async fn process_spreadsheet_core(
     opts: &OptionSet,
-    save_opt: Option<
-        Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
-    >,
+    save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     if let Some(filepath) = opts.path.clone() {
@@ -91,9 +91,7 @@ pub async fn process_spreadsheet_core(
 )]
 pub async fn render_spreadsheet_core(
     opts: &OptionSet,
-    save_opt: Option<
-        Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
-    >,
+    save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     process_spreadsheet_core(opts, save_opt, out_ref).await
@@ -104,9 +102,7 @@ pub async fn render_spreadsheet_core(
 pub async fn read_workbook_core<'a>(
     path_data: &PathData<'a>,
     opts: &OptionSet,
-    save_opt: Option<
-        Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
-    >,
+    save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     if let Ok(mut workbook) = open_workbook_auto(path_data.path()) {
@@ -114,7 +110,7 @@ pub async fn read_workbook_core<'a>(
         let (selected_names, sheet_names, _sheet_indices) =
             match_sheet_name_and_index(&mut workbook, opts);
 
-        if selected_names.len() > 0 {
+        if !selected_names.is_empty() {
             let info = WorkbookInfo::new(path_data, &selected_names, &sheet_names);
 
             if opts.multimode() {
@@ -140,9 +136,8 @@ async fn read_multiple_worksheets(
     max_rows: usize,
 ) -> Result<ResultSet, GenericError> {
     let mut sheets: Vec<SheetDataSet> = vec![];
-    let mut sheet_index: usize = 0;
     let capture_rows = opts.capture_rows();
-    for sheet_ref in sheet_names {
+    for (sheet_index, sheet_ref) in sheet_names.iter().enumerate() {
         let range = workbook.worksheet_range(&sheet_ref.clone())?;
         let mut headers: Vec<String> = vec![];
         let mut has_headers = false;
@@ -185,7 +180,7 @@ async fn read_multiple_worksheets(
                 }
                 if match_header_row_below && (row_index + 1) == header_row_index {
                     let h_row = row
-                        .into_iter()
+                        .iter()
                         .map(|c| c.to_string().to_snake_case())
                         .collect::<Vec<String>>();
                     let natural_keys = natural_column_keys(&h_row, &opts.field_mode);
@@ -194,18 +189,18 @@ async fn read_multiple_worksheets(
                     resolved_row_opts.columns = resolved_columns;
                     has_headers = true;
                 } else if (has_headers || !capture_headers) && capture_rows {
-                    let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-                    if is_not_header_row(&row_map, row_index, &col_keys) {
+                    let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                    if is_not_header_row(&raw_values, row_index, &col_keys) {
+                        let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                         rows.push(row_map);
                     }
                 }
                 row_index += 1;
             }
         }
-        sheets.push(SheetDataSet::new(&sheet_ref, &headers, &rows, total));
-        sheet_index += 1;
+        sheets.push(SheetDataSet::new(sheet_ref, &headers, &rows, total));
     }
-    Ok(ResultSet::from_multiple(&sheets, &info, opts))
+    Ok(ResultSet::from_multiple(&sheets, info, opts))
 }
 
 /// Read a single worksheet from a workbook in immediate (sync) or asycnhronous modes
@@ -214,9 +209,7 @@ pub async fn read_single_worksheet(
     sheet_ref: &str,
     opts: &OptionSet,
     info: &WorkbookInfo,
-    save_opt: Option<
-        Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
-    >,
+    save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     let range = workbook.worksheet_range(sheet_ref)?;
@@ -260,7 +253,7 @@ pub async fn read_single_worksheet(
             }
             if match_header_row_below && (row_index + 1) == header_row_index {
                 let h_row = row
-                    .into_iter()
+                    .iter()
                     .map(|c| c.to_string().to_snake_case())
                     .collect::<Vec<String>>();
                 let natural_keys = natural_column_keys(&h_row, &opts.field_mode);
@@ -270,8 +263,9 @@ pub async fn read_single_worksheet(
                 has_headers = true;
             } else if (has_headers || !capture_headers) && capture_rows {
                 // only capture rows if headers are either omitted or have already been captured
-                let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-                if is_not_header_row(&row_map, row_index, &col_keys) {
+                let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                if is_not_header_row(&raw_values, row_index, &col_keys) {
+                    let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                     rows.push(row_map);
                 }
             }
@@ -282,8 +276,9 @@ pub async fn read_single_worksheet(
         let mut row_iter = range.rows();
         let mut save_count: usize = 0;
         if let Some(first_row) = row_iter.next() {
-            let first_row_map = workbook_row_to_map(first_row, &resolved_row_opts, &headers);
-            if is_not_header_row(&first_row_map, 0, &col_keys) {
+            let raw_values: Vec<String> = first_row.iter().map(|c| c.to_string()).collect();
+            if is_not_header_row(&raw_values, 0, &col_keys) {
+                let first_row_map = workbook_row_to_map(first_row, &resolved_row_opts, &headers);
                 save_method(first_row_map)?;
                 save_count += 1;
             }
@@ -307,9 +302,7 @@ pub async fn read_single_worksheet(
 pub async fn read_csv_core<'a>(
     path_data: &PathData<'a>,
     opts: &OptionSet,
-    save_opt: Option<
-        Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>,
-    >,
+    save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
     let separator = match path_data.mode() {
@@ -320,7 +313,7 @@ pub async fn read_csv_core<'a>(
         .delimiter(separator)
         .from_path(path_data.path())
     {
-        let capture_header = opts.omit_header == false;
+        let capture_header = !opts.omit_header;
         let capture_rows = opts.capture_rows();
         let max_line_usize = opts.max_rows();
         let mut rows: Vec<IndexMap<String, Value>> =
@@ -341,13 +334,12 @@ pub async fn read_csv_core<'a>(
         }
 
         let mut total = 0;
-        let opts_rows_arc = Arc::new(&resolved_row_opts);
         if capture_rows {
             for result in rdr.records() {
                 if line_count >= max_line_usize {
                     break;
                 }
-                if let Some(row) = csv_row_result_to_values(result, opts_rows_arc.clone()) {
+                if let Some(row) = csv_row_result_to_values(result, &resolved_row_opts) {
                     rows.push(to_index_map(&row, &headers));
                     line_count += 1;
                 }
@@ -355,14 +347,14 @@ pub async fn read_csv_core<'a>(
             total = line_count + rdr.records().count() + 1;
         } else if let Some(save_method) = save_opt {
             for result in rdr.records() {
-                if let Some(row) = csv_row_result_to_values(result, opts_rows_arc.clone()) {
+                if let Some(row) = csv_row_result_to_values(result, &resolved_row_opts) {
                     let row_map = to_index_map(&row, &headers);
                     save_method(row_map)?;
                     total += 1;
                 }
             }
         } else {
-            if let Ok(mut count_rdr) = ReaderBuilder::new().from_path(&path_data.path()) {
+            if let Ok(mut count_rdr) = ReaderBuilder::new().from_path(path_data.path()) {
                 total = count_rdr.records().count();
             }
         }
@@ -389,32 +381,40 @@ fn workbook_row_to_map(
 
 // Convert an array of row data to a vector of serde_json::Value objects
 fn workbook_row_to_values(row: &[Data], opts: &RowOptionSet) -> Vec<Value> {
-    let opts_arc = Arc::new(opts);
-    let mut c_index = 0;
-    let mut cells: Vec<Value> = vec![];
-    for cell in row {
-        let value = workbook_cell_to_value(cell, opts_arc.clone(), c_index);
-        cells.push(value);
-        c_index += 1;
-    }
-    cells
+    row.iter()
+        .enumerate()
+        .map(|(c_index, cell)| workbook_cell_to_value(cell, opts, c_index))
+        .collect()
 }
 
 /// Convert a spreadsheet data cell to a polymorphic serde_json::Value object
-fn workbook_cell_to_value(cell: &Data, opts: Arc<&RowOptionSet>, c_index: usize) -> Value {
+fn workbook_cell_to_value(cell: &Data, opts: &RowOptionSet, c_index: usize) -> Value {
     let col = opts.column(c_index);
     let format = col.map_or(Format::Auto, |c| c.format.to_owned());
     let def_val = col.and_then(|c| c.default.clone());
 
+    let date_only = resolve_date_only(&format, opts.date_only);
+
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
         Data::Float(f) => process_float_value(*f, format),
-        Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, opts.date_only),
-        Data::DateTime(d) => process_excel_datetime_value(d, def_val, opts.date_only),
+        Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, date_only),
+        Data::DateTime(d) => process_excel_datetime_value(d, def_val, date_only),
         Data::Bool(b) => Value::Bool(*b),
         Data::String(s) => process_string_value(s, format, def_val),
         Data::Empty => def_val.unwrap_or(Value::Null),
         _ => Value::String(cell.to_string()),
+    }
+}
+
+/// A column's own Format::Date/Format::DateTime override takes precedence over the
+/// row-wide --date-only default; any other format (including Format::Auto) falls back
+/// to that row-wide default, unchanged from before this override existed.
+fn resolve_date_only(format: &Format, row_date_only: bool) -> bool {
+    match format {
+        Format::Date => true,
+        Format::DateTime => false,
+        _ => row_date_only,
     }
 }
 
@@ -449,10 +449,10 @@ fn process_excel_datetime_value(
 fn process_iso_datetime_value(dt_str: &str, def_val: Option<Value>, date_only: bool) -> Value {
     if date_only {
         iso_fuzzy_to_date_string(dt_str)
-            .map_or_else(|| def_val.unwrap_or(Value::Null), |dt| Value::String(dt))
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String)
     } else {
         iso_fuzzy_to_datetime_string(dt_str)
-            .map_or_else(|| def_val.unwrap_or(Value::Null), |dt| Value::String(dt))
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String)
     }
 }
 
@@ -509,23 +509,21 @@ where
 // Convert csv rows to value
 fn csv_row_result_to_values(
     result: Result<StringRecord, csv::Error>,
-    opts: Arc<&RowOptionSet>,
+    opts: &RowOptionSet,
 ) -> Option<Vec<Value>> {
     if let Ok(record) = result {
-        let mut row: Vec<Value> = vec![];
-        let mut ci: usize = 0;
-        for cell in record.into_iter() {
-            let new_cell = csv_cell_to_json_value(cell, opts.clone(), ci);
-            row.push(new_cell);
-            ci += 1;
-        }
+        let row = record
+            .into_iter()
+            .enumerate()
+            .map(|(ci, cell)| csv_cell_to_json_value(cell, opts, ci))
+            .collect();
         return Some(row);
     }
     None
 }
 
 // convert CSV cell &str value to a polymorphic serde_json::VALUE
-fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) -> Value {
+fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Value {
     let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric
     let col = opts.column(index);
@@ -545,7 +543,7 @@ fn csv_cell_to_json_value(cell: &str, opts: Arc<&RowOptionSet>, index: usize) ->
         cell.to_owned()
     };
     let mut new_cell = Value::Null;
-    if num_cell.len() > 0 && num_cell.is_numeric() {
+    if !num_cell.is_empty() && num_cell.is_numeric() {
         if let Ok(float_val) = serde_json::Number::from_str(&num_cell) {
             match fmt {
                 Format::Integer => {
@@ -647,16 +645,45 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_date_only_prefers_column_format_over_row_default() {
+        // A column's own Format::Date/Format::DateTime overrides the row-wide
+        // --date-only default; Format::Auto (and anything else) falls back to it.
+        assert!(resolve_date_only(&Format::Date, false));
+        assert!(!resolve_date_only(&Format::DateTime, true));
+        assert!(!resolve_date_only(&Format::Auto, false));
+        assert!(resolve_date_only(&Format::Auto, true));
+    }
+
+    #[test]
+    fn test_source_key_override_casts_native_datetime_cell_to_date_only() {
+        // Regression test: workbook_cell_to_value computed the column's Format override
+        // but only ever consulted the row-wide --date-only flag for Data::DateTime /
+        // Data::DateTimeIso cells, so a per-column `Format::Date` override on a real
+        // (non-string) datetime cell had no effect at all.
+        let sample_path = "data/sample-data-1.xlsx";
+        let mut opts = OptionSet::new(sample_path).max_row_count(1);
+        opts.rows.columns = vec![
+            Column::from_source_key_with_format("start_time", None, Format::Date, None, false, false),
+        ];
+
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        let first = rows.first().expect("at least one row");
+        let start_time = first.get("start_time").expect("start_time column").as_str().unwrap();
+        assert_eq!(start_time, "2023-06-15");
+        assert!(!start_time.contains('T'), "should be date-only, got: {}", start_time);
+    }
+
+    #[test]
     fn test_csv_cell_integer_format_truncates_decimal_values() {
         // Regression test: Number::as_i128() only succeeds for already-integer-valued
         // Numbers, so casting a decimal CSV cell like "58.2" to Format::Integer used to
         // silently produce 0 via unwrap_or(0) instead of the truncated value.
         let cols = vec![Column::new_format(Format::Integer, None)];
         let row_opts = RowOptionSet::simple(&cols);
-        let opts_arc = Arc::new(&row_opts);
-        assert_eq!(csv_cell_to_json_value("58.2", opts_arc.clone(), 0), Value::Number(Number::from(58)));
-        assert_eq!(csv_cell_to_json_value("82.5", opts_arc.clone(), 0), Value::Number(Number::from(82)));
-        assert_eq!(csv_cell_to_json_value("100", opts_arc.clone(), 0), Value::Number(Number::from(100)));
+        assert_eq!(csv_cell_to_json_value("58.2", &row_opts, 0), Value::Number(Number::from(58)));
+        assert_eq!(csv_cell_to_json_value("82.5", &row_opts, 0), Value::Number(Number::from(82)));
+        assert_eq!(csv_cell_to_json_value("100", &row_opts, 0), Value::Number(Number::from(100)));
     }
 
     #[test]
@@ -666,13 +693,12 @@ mod tests {
         // and matched against is_truthy_core's numeric range, even though the
         // column has no boolean intent (Format::Auto, the default).
         let row_opts = RowOptionSet::default();
-        let opts_arc = Arc::new(&row_opts);
-        assert_eq!(csv_cell_to_json_value("SKU001", opts_arc.clone(), 0), Value::String("SKU001".to_string()));
-        assert_eq!(csv_cell_to_json_value("A1", opts_arc.clone(), 0), Value::String("A1".to_string()));
-        assert_eq!(csv_cell_to_json_value("01/06/2024", opts_arc.clone(), 0), Value::String("01/06/2024".to_string()));
+        assert_eq!(csv_cell_to_json_value("SKU001", &row_opts, 0), Value::String("SKU001".to_string()));
+        assert_eq!(csv_cell_to_json_value("A1", &row_opts, 0), Value::String("A1".to_string()));
+        assert_eq!(csv_cell_to_json_value("01/06/2024", &row_opts, 0), Value::String("01/06/2024".to_string()));
         // literal boolean tokens should still be recognised
-        assert_eq!(csv_cell_to_json_value("true", opts_arc.clone(), 0), Value::Bool(true));
-        assert_eq!(csv_cell_to_json_value("false", opts_arc.clone(), 0), Value::Bool(false));
+        assert_eq!(csv_cell_to_json_value("true", &row_opts, 0), Value::Bool(true));
+        assert_eq!(csv_cell_to_json_value("false", &row_opts, 0), Value::Bool(false));
     }
 
     #[test]

@@ -33,7 +33,7 @@ impl RowOptionSet {
   // lets you set all options
   pub fn new(cols: &[Column], decimal_comma: bool, date_only: bool) -> Self {
     RowOptionSet {
-      decimal_comma: decimal_comma,
+      decimal_comma,
       date_only,
       columns: cols.to_vec()
     }
@@ -235,10 +235,10 @@ impl OptionSet {
       } else {
         json!({
           "sheet": selected.first().unwrap_or(&"".to_string()),
-          "index": self.indices.get(0).unwrap_or(&0)
+          "index": self.indices.first().unwrap_or(&0)
         })
       };
-      output.insert("selected".to_string(), selected.into());
+      output.insert("selected".to_string(), selected);
     }
     if let Some(fname) = self.file_name() {
       output.insert("file name".to_string(), fname.into());
@@ -252,7 +252,7 @@ impl OptionSet {
     output.insert("jsonl".to_string(), self.jsonl.into());
     output.insert("decimal_separator".to_string(), self.rows.decimal_separator().into());
     output.insert("date_only".to_string(), self.rows.date_only.into());
-    if self.columns().len() > 0 {
+    if !self.columns().is_empty() {
       let columns: Vec<Value> = self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect();
       output.insert("columns".to_string(), columns.into());
     }
@@ -274,7 +274,7 @@ impl OptionSet {
         ""
       };
       lines.push(format!("sheet name{}: {}", plural, s_names.join(",")));
-    } else if self.indices.len() > 0 {
+    } else if !self.indices.is_empty() {
       lines.push(format!("sheet indices: {}", self.index_list()));
     }
     if let Some(fname) = self.file_name() {
@@ -295,7 +295,7 @@ impl OptionSet {
       format!("column style: {}", self.field_mode.to_string())
     ]);
 
-    if self.columns().len() > 0 {
+    if !self.columns().is_empty() {
       lines.push("columns:".to_string());
       for col in self.rows.columns.clone() {
         lines.push(col.to_line());
@@ -329,7 +329,7 @@ impl OptionSet {
 
   /// cloned read mode
   pub fn read_mode(&self) -> ReadMode {
-    self.read_mode.clone()
+    self.read_mode
   }
 
   /// Needs full data set to processed later
@@ -339,10 +339,7 @@ impl OptionSet {
 
   // Should rows be captured synchronously
   pub fn capture_rows(&self) -> bool {
-    match self.read_mode {
-      ReadMode::Async => false,
-      _ => true
-    }
+    !matches!(self.read_mode, ReadMode::Async)
   }
 
 }
@@ -365,26 +362,26 @@ pub enum Format {
   TruthyCustom(TruthyRuleSet) // define custom yes/no values
 }
 
-impl ToString for Format {
-  fn to_string(&self) -> String {
+impl std::fmt::Display for Format {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let result = match self {
-      Self::Auto => "auto",
-      Self::Text => "text",
-      Self::Integer => "integer",
-      Self::Decimal(n) => &format!("decimal({})", n),
-      Self::Float => "float",
-      Self::Boolean => "boolean",
-      Self::Date => "date",
-      Self::DateTime => "datetime",
-      Self::DateTimeCustom(fmt) => &format!("datetime({})", fmt),
-      Self::Truthy => "truthy",
+      Self::Auto => "auto".to_string(),
+      Self::Text => "text".to_string(),
+      Self::Integer => "integer".to_string(),
+      Self::Decimal(n) => format!("decimal({})", n),
+      Self::Float => "float".to_string(),
+      Self::Boolean => "boolean".to_string(),
+      Self::Date => "date".to_string(),
+      Self::DateTime => "datetime".to_string(),
+      Self::DateTimeCustom(fmt) => format!("datetime({})", fmt),
+      Self::Truthy => "truthy".to_string(),
       Self::TruthyCustom(rules) => {
         let true_str: Vec<String> = rules.true_options().iter().map(|o| o.pattern().to_string()).collect();
         let false_str: Vec<String> = rules.false_options().iter().map(|o| o.pattern().to_string()).collect();
-        &format!("truthy({},{})", true_str.join("|"), false_str.join("|"))
+        format!("truthy({},{})", true_str.join("|"), false_str.join("|"))
       },
     };
-    result.to_string() // Convert the string slice to a String
+    write!(f, "{}", result)
   }
 }
 
@@ -503,7 +500,7 @@ impl Column {
         match def_val {
           Value::String(s) => Some(Value::String(s.clone())),
           Value::Number(n) => Some(Value::Number(n.clone())),
-          Value::Bool(b) => Some(Value::Bool(b.clone())),
+          Value::Bool(b) => Some(Value::Bool(*b)),
           _ => None
         }
       },
@@ -596,7 +593,7 @@ impl Column {
       ""
     }.to_owned();
     let def_string = if let Some(def_val) = self.default.clone() {
-      format!("default: {}", def_val.to_string())
+      format!("default: {}", def_val)
     } else {
       "".to_string()
     };
@@ -613,7 +610,7 @@ impl Column {
     format!(
       "\tkey {}, format {}{}{}{}{}",
       self.key_name(),
-      self.format.to_string(),
+      self.format,
       def_string,
       date_only_str,
       comma_str,
@@ -630,6 +627,7 @@ pub enum Extension {
   Unmatched,
   Ods,
   Xlsx,
+  Xlsm,
   Xlsb,
   Xls,
   Csv,
@@ -644,6 +642,11 @@ impl Extension {
         return match  ext_lc.as_str() {
           "ods" => Extension::Ods,
           "xlsx" => Extension::Xlsx,
+          // .xlsm (macro-enabled) is the same OOXML container as .xlsx -- calamine's own
+          // open_workbook_auto already routes both through its Xlsx reader (it does its
+          // own extension check on the same path), so there's nothing macro-specific to
+          // handle here; we just need to stop rejecting the extension before it gets there.
+          "xlsm" => Extension::Xlsm,
           "xlsb" => Extension::Xlsb,
           "xls" => Extension::Xls,
           "csv" => Extension::Csv,
@@ -657,35 +660,31 @@ impl Extension {
 
   /// use the Calamine library
   pub fn use_calamine(&self) -> bool {
-    match self {
-      Self::Ods | Self::Xlsx | Self::Xlsb | Self::Xls => true,
-      _ => false
-    }
+    matches!(self, Self::Ods | Self::Xlsx | Self::Xlsm | Self::Xlsb | Self::Xls)
   }
-  
+
   /// added for future development
   /// Process a simple CSV or TSV
   #[allow(dead_code)]
   pub fn use_csv(&self) -> bool {
-    match self {
-      Self::Csv | Self::Tsv => true,
-      _ => false
-    }
+    matches!(self, Self::Csv | Self::Tsv)
   }
 
 }
 
-impl ToString for Extension {
-  fn to_string(&self) -> String {
-    match self {
+impl std::fmt::Display for Extension {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let result = match self {
       Self::Ods => "ods",
       Self::Xlsx => "xlsx",
+      Self::Xlsm => "xlsm",
       Self::Xlsb => "xlsb",
       Self::Xls => "xls",
       Self::Csv => "csv",
       Self::Tsv => "tsv",
       _ => ""
-    }.to_string()
+    };
+    write!(f, "{}", result)
   }
 }
 
@@ -719,10 +718,7 @@ impl<'a> PathData<'a> {
   }
 
   pub fn is_valid(&self) -> bool {
-    match self.ext {
-      Extension::Unmatched => false,
-      _ => true
-    }
+    !matches!(self.ext, Extension::Unmatched)
   }
 
   pub fn use_calamine(&self) -> bool {
@@ -761,29 +757,23 @@ impl ReadMode {
   }
 
   pub fn is_async(&self) -> bool {
-    match self {
-      Self::Async => true,
-      _ => false
-    }
+    matches!(self, Self::Async)
   }
 
   /// not preview or sync mode
   pub fn is_multimode(&self) -> bool {
-    match self {
-      Self::PreviewMultiple => true,
-      _ => false
-    }
+    matches!(self, Self::PreviewMultiple)
   }
 }
 
-impl ToString for ReadMode {
-
-  fn to_string(&self) -> String {
-    match self {
+impl std::fmt::Display for ReadMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let result = match self {
       Self::Async => "deferred",
       Self::PreviewMultiple => "preview",
       _ => "direct"
-    }.to_string()
+    };
+    write!(f, "{}", result)
   }
 }
 
@@ -822,42 +812,34 @@ impl FieldNameMode {
 
   /// use AQ column field style
   pub fn use_a1(&self) -> bool {
-    match self {
-      Self::AutoA1 | Self::A1 => true,
-      _ => false
-    }
+    matches!(self, Self::AutoA1 | Self::A1)
   }
 
   /// use c01 column field style
   pub fn use_c01(&self) -> bool {
-    match self {
-      Self::AutoNumPadded | Self::NumPadded => true,
-      _ => false
-    }
+    matches!(self, Self::AutoNumPadded | Self::NumPadded)
   }
 
    /// use seqquential a1 or C01 column style unless custom overrides are added
    pub fn override_headers(&self) -> bool {
-    match self {
-      Self::NumPadded | Self::A1 => true,
-      _ => false
-    }
+    matches!(self, Self::NumPadded | Self::A1)
   }
 
   /// use default headers if available unless override by custom headers
   pub fn keep_headers(&self) -> bool {
-    self.override_headers() == false
+    !self.override_headers()
   }
 }
 
-impl ToString for FieldNameMode {
-  fn to_string(&self) -> String {
-    match self {
+impl std::fmt::Display for FieldNameMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let result = match self {
       Self::AutoNumPadded => "C01 auto",
       Self::NumPadded => "C01 override",
       Self::A1 => "A1 override",
       _ => "A1 auto",
-    }.to_string()    
+    };
+    write!(f, "{}", result)
   }
 }
 
@@ -876,6 +858,18 @@ mod tests {
     let (true_keys, false_keys) = match_custom_truthy("tr:si,no").unwrap();
     assert_eq!("si", true_keys);
     assert_eq!("no", false_keys);
+  }
+
+  #[test]
+  fn test_xlsm_is_recognised_and_routed_through_calamine() {
+    // Regression: .xlsm (macro-enabled) is the same OOXML container as .xlsx -- calamine's
+    // own open_workbook_auto already reads both through its Xlsx reader -- but our own
+    // Extension enum didn't recognise the extension at all, so .xlsm files were rejected
+    // before calamine ever got a chance to open them.
+    let ext = Extension::from_path(Path::new("workbook.xlsm"));
+    assert!(matches!(ext, Extension::Xlsm));
+    assert!(ext.use_calamine());
+    assert_eq!(ext.to_string(), "xlsm");
   }
 
 }

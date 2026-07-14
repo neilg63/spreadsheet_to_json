@@ -14,8 +14,8 @@ pub fn json_object_to_indexmap(json: Value) -> Option<IndexMap<String, Value>> {
 pub fn json_object_to_calamine_data(json: Value) -> Vec<Data> {
   let mut cells = vec![];
   if let Some(obj) = json.as_object() {
-    for (_k, v) in obj.to_owned() {
-      let cell = match v {
+    for v in obj.values() {
+      let cell = match v.clone() {
         Value::Number(fl) => Data::Float(fl.as_f64().unwrap_or(0.0)),
         Value::Bool(b) => Data::Bool(b),
         Value::String(s) => Data::String(s),

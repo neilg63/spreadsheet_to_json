@@ -16,6 +16,7 @@ mod tests {
   use super::*;
 
   #[test]
+  #[allow(clippy::approx_constant)]
   fn test_round_decimal() {
       let sample_number = 3.14159265359;
       assert_eq!(sample_number.round_decimal(2), 3.14);

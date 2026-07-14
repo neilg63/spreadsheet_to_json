@@ -98,14 +98,12 @@ impl ResultSet {
     let extension = info.extension.clone();
     let mut keys: Vec<String> = vec![];
     let mut num_rows = 0;
-    let mut sheet_index: usize = 0;
-    for sheet in sheets {
+    for (sheet_index, sheet) in sheets.iter().enumerate() {
       num_rows += sheet.num_rows;
       sheet_names.push(sheet.name());
       if sheet_index == 0 {
         keys = sheet.keys.clone();
       }
-      sheet_index += 1;
     }
     ResultSet {
       extension,
@@ -122,10 +120,7 @@ impl ResultSet {
 
 
   pub fn multimode(&self) -> bool {
-    match self.data {
-      SpreadData::Multiple(_) => true,
-      _ => false
-    }
+    matches!(self.data, SpreadData::Multiple(_))
   }
 
   /// Full result set as JSON with criteria, options and data in synchronous mode
@@ -273,7 +268,7 @@ impl SpreadData {
     match self {
       SpreadData::Single(rows) => rows.to_owned(),
       SpreadData::Multiple(sheets) => {
-        if let Some(sheet) = sheets.get(0) {
+        if let Some(sheet) = sheets.first() {
           sheet.rows.to_owned()
         } else {
           vec![]
@@ -317,12 +312,10 @@ impl DataSet {
 
 pub fn to_index_map(row: &[serde_json::Value], headers: &[String]) -> IndexMap<String, Value> {
     let mut hm: IndexMap<String, serde_json::Value> = IndexMap::new();
-    let mut sub_index = 0;
-    for hk in headers {
+    for (sub_index, hk) in headers.iter().enumerate() {
         if let Some(cell) = row.get(sub_index) {
             hm.insert(hk.to_owned(), cell.to_owned());
-        } 
-        sub_index += 1;
+        }
     }
     hm
 }
@@ -339,7 +332,7 @@ pub fn match_sheet_name_and_index(workbook: &mut Sheets<BufReader<File>>, opts: 
           }
       }
   }
-  if sheet_indices.len() < 1 && opts.indices.len() > 0 {
+  if sheet_indices.is_empty() && !opts.indices.is_empty() {
     for s_index in opts.indices.clone() {
       let sheet_index = s_index as usize;
       if let Some(sheet_name) = sheet_names.get(sheet_index) {
@@ -348,12 +341,71 @@ pub fn match_sheet_name_and_index(workbook: &mut Sheets<BufReader<File>>, opts: 
       }
     }
   }
-  if sheet_indices.len() < 1 {
+  if sheet_indices.is_empty() {
     sheet_indices = vec![0];
-    if sheet_names.len() > 0 {
+    if !sheet_names.is_empty() {
       selected_names.push(sheet_names[0].clone());
     }
   }
   (selected_names, sheet_names, sheet_indices)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use calamine::open_workbook_auto;
+
+  // data/sample-data-2.ods has two worksheets: "Rsults-2" and "results 1"
+  const SAMPLE_PATH: &str = "data/sample-data-2.ods";
+
+  fn opts_selecting(sheet_key: &str) -> OptionSet {
+    OptionSet::new(SAMPLE_PATH).sheet_name(sheet_key)
+  }
+
+  #[test]
+  fn test_sheet_name_matching_is_case_insensitive_and_ignores_punctuation() {
+    let mut workbook = open_workbook_auto(SAMPLE_PATH).unwrap();
+    // exact, uppercase, lowercase, and punctuation/whitespace variants should all match
+    // the same real sheet name "results 1" via snake_case comparison
+    for variant in ["results 1", "RESULTS 1", "Results_1", "results-1", "  results   1  "] {
+      let opts = opts_selecting(variant);
+      let (selected_names, _sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, &opts);
+      assert_eq!(selected_names, vec!["results 1".to_string()], "variant '{}' should match 'results 1'", variant);
+      assert_eq!(sheet_indices, vec![1], "variant '{}' should resolve to index 1", variant);
+    }
+  }
+
+  #[test]
+  fn test_sheet_name_matching_handles_names_with_no_spaces() {
+    // sheet names like "Sheet1", "Sheet2" (no internal separators at all) should still
+    // match themselves case-insensitively
+    let mut workbook = open_workbook_auto(SAMPLE_PATH).unwrap();
+    for variant in ["Rsults-2", "rsults-2", "RSULTS-2", "rsults_2"] {
+      let opts = opts_selecting(variant);
+      let (selected_names, _sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, &opts);
+      assert_eq!(selected_names, vec!["Rsults-2".to_string()], "variant '{}' should match 'Rsults-2'", variant);
+      assert_eq!(sheet_indices, vec![0]);
+    }
+  }
+
+  #[test]
+  fn test_sheet_name_matching_falls_back_to_first_sheet_when_unmatched() {
+    let mut workbook = open_workbook_auto(SAMPLE_PATH).unwrap();
+    let opts = opts_selecting("nonexistent sheet name");
+    let (selected_names, sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, &opts);
+    assert_eq!(sheet_names, vec!["Rsults-2".to_string(), "results 1".to_string()]);
+    // no match found -> falls back to the first sheet, not an error
+    assert_eq!(selected_names, vec!["Rsults-2".to_string()]);
+    assert_eq!(sheet_indices, vec![0]);
+  }
+
+  #[test]
+  fn test_sheet_index_selection_still_works() {
+    let mut workbook = open_workbook_auto(SAMPLE_PATH).unwrap();
+    let opts = OptionSet::new(SAMPLE_PATH).sheet_index(1);
+    let (selected_names, _sheet_names, sheet_indices) = match_sheet_name_and_index(&mut workbook, &opts);
+    assert_eq!(selected_names, vec!["results 1".to_string()]);
+    assert_eq!(sheet_indices, vec![1]);
+  }
 }
 

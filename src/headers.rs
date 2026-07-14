@@ -1,6 +1,4 @@
 use heck::ToSnakeCase;
-use indexmap::IndexMap;
-use serde_json::Value;
 
 use crate::{Column, FieldNameMode};
 
@@ -61,11 +59,10 @@ pub fn build_header_keys(
     columns: &[Column],
     field_mode: &FieldNameMode,
 ) -> Vec<String> {
-    let mut h_index = 0;
     let mut headers: Vec<String> = vec![];
     let num_cols = first_row.len();
     let keep_headers = field_mode.keep_headers();
-    for h_row in first_row.to_owned() {
+    for (h_index, h_row) in first_row.iter().enumerate() {
         let sn = h_row.to_snake_case();
         let mut has_override = false;
         if let Some(col) = columns.get(h_index) {
@@ -81,7 +78,7 @@ pub fn build_header_keys(
             }
         }
         if !has_override {
-            if keep_headers && sn.len() > 0 {
+            if keep_headers && !sn.is_empty() {
                 let sn_key = if headers.contains(&sn) {
                     to_padded_col_suffix(&sn, h_index, num_cols)
                 } else {
@@ -92,7 +89,6 @@ pub fn build_header_keys(
                 headers.push(to_head_key(h_index, field_mode, num_cols));
             }
         }
-        h_index += 1;
     }
     headers
 }
@@ -143,26 +139,30 @@ pub fn build_c01_headers(first_row: &[String]) -> Vec<String> {
     build_header_keys(first_row, &[], &FieldNameMode::NumPadded)
 }
 
-/// check if the row is not a header row. Always return true if row_index is greater than 0
+/// Check if the row is not a header row. Always returns true if row_index is greater than 0.
+///
+/// Compares the row's *raw*, un-coerced cell text against the raw header text -- not the
+/// row's already-formatted values. Comparing post-format values used to break this check
+/// whenever a column had a non-Auto Format: coercing the header row's own text through that
+/// format (e.g. a decimal parse, or a date parse) commonly turns it into `null` or some other
+/// value that no longer equals the header text, so the header row would be misclassified as
+/// real data and leak into the output.
 pub(crate) fn is_not_header_row(
-    row_map: &IndexMap<String, Value>,
+    raw_values: &[String],
     row_index: usize,
     headers: &[String],
 ) -> bool {
     if row_index > 0 {
         return true;
     }
-    let mut h_index = 0;
     let mut num_matched: usize = 0;
-    for (_key, value) in row_map.iter() {
-        let ref_key = value.to_string().to_snake_case();
-        if let Some(hk) = headers.get(h_index) {
-            let sn = hk.to_snake_case();
-            if sn == ref_key || sn.len() == 0 {
+    for (h_index, hk) in headers.iter().enumerate() {
+        let sn = hk.to_snake_case();
+        if let Some(val) = raw_values.get(h_index) {
+            if val.to_snake_case() == sn || sn.is_empty() {
                 num_matched += 1;
             }
         }
-        h_index += 1;
     }
     num_matched < headers.len()
 }
@@ -202,6 +202,26 @@ mod tests {
     #[test]
     fn test_cell_letters_6() {
         assert_eq!(to_c01_col_key(20, 2000), "c0021");
+    }
+
+    #[test]
+    fn test_is_not_header_row_uses_raw_text_not_coerced_values() {
+        // Regression test: comparing against a row's *coerced* Format-applied values used to
+        // misclassify the header row as real data whenever a column had a non-Auto format,
+        // because coercing the header row's own text (e.g. "weight_kg") through that format
+        // (e.g. Format::Decimal) turned it into null/something else that no longer matched
+        // the header text. Comparing raw, un-coerced cell text sidesteps that entirely.
+        let headers = vec!["sku".to_string(), "weight".to_string()];
+        // the header row repeated verbatim as "data" -- should be detected and excluded
+        let header_row_raw = vec!["sku".to_string(), "weight".to_string()];
+        assert!(!is_not_header_row(&header_row_raw, 0, &headers));
+
+        // genuine data at row 0 (e.g. a headerless sheet) is not excluded
+        let data_row_raw = vec!["SKU001".to_string(), "58.2".to_string()];
+        assert!(is_not_header_row(&data_row_raw, 0, &headers));
+
+        // row_index > 0 is always real data, regardless of content
+        assert!(is_not_header_row(&header_row_raw, 1, &headers));
     }
 
     #[test]
@@ -289,7 +309,7 @@ mod tests {
         ];
         let headers = build_header_keys(&first_row, &cols, &FieldNameMode::AutoA1);
         // should be lower-cased as `viscosity`
-        assert_eq!(headers.get(0).unwrap(), "viscosity");
+        assert_eq!(headers.first().unwrap(), "viscosity");
         // should be overridden as `points`
         assert_eq!(headers.get(1).unwrap(), "points");
         // should be labelled `adjusted`
@@ -305,7 +325,7 @@ mod tests {
 
         let headers = build_a1_headers(&first_row);
         // should be lower-cased as `viscosity`
-        assert_eq!(headers.get(0).unwrap(), "a");
+        assert_eq!(headers.first().unwrap(), "a");
         // the column should be d.
         assert_eq!(headers.get(3).unwrap(), "d");
     }
@@ -317,7 +337,7 @@ mod tests {
             .map(|x| {
                 [
                     char::from_u32(65 + (x % 26)).unwrap_or('_').to_string(),
-                    (x * 3 * 1).to_string(),
+                    (x * 3).to_string(),
                 ]
                 .concat()
             })
@@ -325,7 +345,7 @@ mod tests {
 
         let headers = build_c01_headers(&first_row);
         // the column should be c0001
-        assert_eq!(headers.get(0).unwrap(), "c001");
+        assert_eq!(headers.first().unwrap(), "c001");
         // the column should be c0004
         assert_eq!(headers.get(3).unwrap(), "c004");
     }
