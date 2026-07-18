@@ -11,12 +11,48 @@ pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS_PREVIEW: usize = 1000;
 
+/// How a datetime-bearing cell is rendered. `Full` is the ordinary complete ISO datetime;
+/// the other three each discard progressively more of it. Used both as `RowOptionSet`'s
+/// row-wide default and as `Column`'s per-column override for genuine datetime cells --
+/// see the doc comments on each for how the two combine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DateTimeMode {
+  #[default]
+  Full, // complete date and time with milliseconds and a trailing Z, e.g.
+        // "2023-06-15T10:17:00.000Z" -- the default, JS-interop-friendly form
+  Simple, // complete date and time, but without milliseconds or a trailing Z, e.g.
+          // "2023-06-15T10:17:00"
+  DateOnly, // date component only, e.g. "2023-06-15"
+  TimeOnly, // time-of-day only, with seconds, e.g. "10:17:00"
+  HmOnly, // time-of-day only, hours and minutes, e.g. "10:17" -- for values better read as
+          // a plain clock time (a start/end time, a recurring daily slot) than a precise
+          // duration down to the second
+}
+
+impl std::fmt::Display for DateTimeMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let result = match self {
+      Self::Full => "date/time",
+      Self::Simple => "simple date/time",
+      Self::DateOnly => "date only",
+      Self::TimeOnly => "time only",
+      Self::HmOnly => "hours:minutes only",
+    };
+    write!(f, "{}", result)
+  }
+}
+
 /// Row parsing options with nested column options
 #[derive(Debug, Clone, Default)]
 pub struct RowOptionSet {
   pub columns: Vec<Column>,
   pub decimal_comma: bool, // always parse as euro number format
-  pub date_only: bool,
+  /// Row-wide default rendering mode for datetime cells (genuine `Data::DateTime`/
+  /// `Data::DateTimeIso` cells, and any string/CSV cell under an explicit
+  /// `Format::Date`/`Format::Time`/`Format::Hm`/`Format::DateTime` override). A column's
+  /// own `Format` override, or its own `datetime_mode` on a `Format::Auto` column, takes
+  /// precedence over this row-wide default; see `Column::datetime_mode`.
+  pub datetime_mode: DateTimeMode,
 }
 
 impl RowOptionSet {
@@ -25,16 +61,16 @@ impl RowOptionSet {
   pub fn simple(cols: &[Column]) -> Self {
     RowOptionSet {
       decimal_comma: false,
-      date_only: false,
+      datetime_mode: DateTimeMode::Full,
       columns: cols.to_vec()
     }
   }
 
   // lets you set all options
-  pub fn new(cols: &[Column], decimal_comma: bool, date_only: bool) -> Self {
+  pub fn new(cols: &[Column], decimal_comma: bool, datetime_mode: DateTimeMode) -> Self {
     RowOptionSet {
       decimal_comma,
-      date_only,
+      datetime_mode,
       columns: cols.to_vec()
     }
   }
@@ -44,11 +80,7 @@ impl RowOptionSet {
   }
 
   pub fn date_mode(&self) -> String {
-    if self.date_only {
-      "date only"
-    } else {
-      "date/time"
-    }.to_string()
+    self.datetime_mode.to_string()
   }
 
   pub fn decimal_separator(&self) -> String {
@@ -70,7 +102,24 @@ pub struct OptionSet {
   pub jsonl: bool,
   pub max: Option<u32>,
   pub omit_header: bool,
-  pub header_row: u8,
+  /// 0-based row index of the header row. `None` means unset -- when `data_row_index` is
+  /// also unset (and headers aren't omitted), the reader runs a best-guess detection
+  /// pass instead of blindly assuming row 0; see `detect::detect_header_and_data_rows`.
+  pub header_row: Option<usize>,
+  /// 0-based row index where actual data begins. `None` (the default) means immediately
+  /// after the header row (or triggers detection, per `header_row`'s doc above). Rows
+  /// strictly between the header row and this one are skipped entirely -- neither
+  /// captured as headers nor as data -- for spreadsheets that leave a note, blank, or
+  /// subtitle row between the header and the first real data row.
+  pub data_row_index: Option<usize>,
+  /// Whether to run best-guess header/data-row detection (see
+  /// `detect::detect_header_and_data_rows`) when both `header_row` and `data_row_index`
+  /// are unset, instead of assuming row 0 is the header. Off (`false`) by default for
+  /// direct library use, so `OptionSet::new(path)` alone always behaves the same simple,
+  /// predictable way it always has -- callers that want detection opt in explicitly via
+  /// `.detect_header()`. Consumers like `spread-cli` that want it as *their own* default
+  /// user experience turn it on unconditionally when building their `OptionSet`.
+  pub detect_header: bool,
   pub read_mode: ReadMode,
   pub field_mode: FieldNameMode
 }
@@ -86,7 +135,9 @@ impl OptionSet {
         jsonl: false,
         max: None,
         omit_header: false,
-        header_row: 0,
+        header_row: None,
+        data_row_index: None,
+        detect_header: false,
         read_mode: ReadMode::Sync,
         field_mode: FieldNameMode::AutoA1,
     }
@@ -134,9 +185,27 @@ impl OptionSet {
       self
   }
 
-  /// Sets the header row index.
-  pub fn header_row(mut self, row: u8) -> Self {
-      self.header_row = row;
+  /// Sets the header row's 0-based row index.
+  pub fn header_row(mut self, row: usize) -> Self {
+      self.header_row = Some(row);
+      self
+  }
+
+  /// Sets the 0-based row index where actual data begins. Rows between the header row
+  /// and this one are skipped entirely, for spreadsheets that leave a note or blank row
+  /// between the header and the first real data row. If set at or before the header row,
+  /// this is ignored and data capture falls back to starting immediately after the
+  /// header row instead.
+  pub fn data_row_index(mut self, row: usize) -> Self {
+      self.data_row_index = Some(row);
+      self
+  }
+
+  /// Opts into best-guess header/data-row detection when both `header_row` and
+  /// `data_row_index` are left unset, instead of the library's normal default of
+  /// assuming row 0 is the header. Off by default -- see the `detect_header` field doc.
+  pub fn detect_header(mut self) -> Self {
+      self.detect_header = true;
       self
   }
 
@@ -248,10 +317,12 @@ impl OptionSet {
     }
     output.insert("omit_header".to_string(), self.omit_header.into());
     output.insert("header_row".to_string(), self.header_row.into());
+    output.insert("data_row_index".to_string(), self.data_row_index.into());
+    output.insert("detect_header".to_string(), self.detect_header.into());
     output.insert("read_mode".to_string(), self.read_mode.to_string().into());
     output.insert("jsonl".to_string(), self.jsonl.into());
     output.insert("decimal_separator".to_string(), self.rows.decimal_separator().into());
-    output.insert("date_only".to_string(), self.rows.date_only.into());
+    output.insert("date_mode".to_string(), self.rows.date_mode().into());
     if !self.columns().is_empty() {
       let columns: Vec<Value> = self.rows.columns.clone().into_iter().map(|c| c.to_json()).collect();
       output.insert("columns".to_string(), columns.into());
@@ -289,7 +360,8 @@ impl OptionSet {
     lines.extend(vec![
       format!("mode: {}", self.row_mode()),
       format!("headers: {}", self.header_mode()),
-      format!("header row: {}", self.header_row),
+      format!("header row: {}", self.header_row.map(|v| v.to_string()).unwrap_or_else(|| if self.detect_header { "auto-detect".to_string() } else { "0 (default)".to_string() })),
+      format!("data row index: {}", self.data_row_index.map(|v| v.to_string()).unwrap_or_else(|| "default (immediately after header)".to_string())),
       format!("decimal separator: {}", self.rows.decimal_separator()),
       format!("date mode: {}", self.rows.date_mode()),
       format!("column style: {}", self.field_mode.to_string())
@@ -304,9 +376,43 @@ impl OptionSet {
     lines
   }
 
-  /// header row index as usize
+  /// 0-based header row index, resolved *without* auto-detection -- `header_row` if set,
+  /// row 0 otherwise. Detection (see `detect::detect_header_and_data_rows`) only runs
+  /// when both `header_row` and `data_row_index` are unset, and requires sample row data
+  /// this method doesn't have access to; readers check for that case themselves before
+  /// falling back to this method.
   pub fn header_row_index(&self) -> usize {
-    self.header_row as usize
+    self.header_row.unwrap_or(0)
+  }
+
+  /// 0-based absolute row index at which data capture may begin, combining `header_row`,
+  /// `data_row_index`, and `omit_header`. `None` when nothing is customized (header row
+  /// 0, no explicit data row) -- meaning no additional gating beyond the ordinary "first
+  /// row after the header" behavior applies, so callers can skip this check entirely
+  /// rather than compute a value that changes nothing.
+  ///
+  /// `data_row_index` is honored literally whenever it's at or after the header row --
+  /// including *equal to* the header row, which is a legitimate (if rare) configuration:
+  /// a CSV with predefined/external headers where no line is actually consumed as a
+  /// header, or a sheet that inherits its column names from elsewhere and has no header
+  /// line of its own. It's only treated as unset (falling back to the default below) when
+  /// it's strictly *before* the header row, which is never meaningful.
+  ///
+  /// The default when `data_row_index` is unset depends on whether a header row is
+  /// actually being consumed: immediately after the header row when one is (the common
+  /// case), or right at the header row itself when `omit_header` is set -- since then no
+  /// row is being consumed for headers in the first place, so there's nothing to skip
+  /// past.
+  pub fn first_data_row_index(&self) -> Option<usize> {
+    if self.header_row.is_none() && self.data_row_index.is_none() {
+      return None;
+    }
+    let header_row_index = self.header_row_index();
+    let default_start = if self.omit_header { header_row_index } else { header_row_index + 1 };
+    match self.data_row_index {
+      Some(requested) if requested >= header_row_index => Some(requested),
+      _ => Some(default_start),
+    }
   }
 
   /// get the maximum of rows to be output synchronously
@@ -356,6 +462,9 @@ pub enum Format {
   Boolean, // Boolean or  cast to boolean from integers
   Date, // Interpret as date only
   DateTime, // Interpret as full datetime
+  DateTimeSimple, // Interpret as full datetime, without milliseconds or a trailing Z
+  Time, // Interpret as time-of-day only, discarding any date component
+  Hm, // Interpret as hours:minutes only, discarding seconds and any date component
   DateTimeCustom(Arc<str>),
   Truthy, // interpret common yes/no, y/n, true/false text strings as true/false
   #[allow(dead_code)]
@@ -373,6 +482,9 @@ impl std::fmt::Display for Format {
       Self::Boolean => "boolean".to_string(),
       Self::Date => "date".to_string(),
       Self::DateTime => "datetime".to_string(),
+      Self::DateTimeSimple => "simple".to_string(),
+      Self::Time => "time".to_string(),
+      Self::Hm => "hm".to_string(),
       Self::DateTimeCustom(fmt) => format!("datetime({})", fmt),
       Self::Truthy => "truthy".to_string(),
       Self::TruthyCustom(rules) => {
@@ -403,6 +515,9 @@ impl FromStr for Format {
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
+        "ds" | "simple" | "datetime_simple" => Self::DateTimeSimple,
+        "ti" | "time" => Self::Time,
+        "hm" | "hoursminutes" => Self::Hm,
         "tr" | "truthy" => Self::Truthy,
         _ => {
           if let Some(str) = match_custom_dt(key) {
@@ -448,6 +563,30 @@ impl Format {
   }
 }
 
+/// Reads a column's per-column `DateTimeMode` from JSON, either via an explicit
+/// `"datetime_mode": "date"/"time"/"hm"/"full"` string, or (for backwards compatibility
+/// with configs predating `DateTimeMode`) the boolean keys `"date_only"`/`"time_only"`/
+/// `"hm_only"`, checked in that order of precedence.
+fn datetime_mode_from_json(json: &Value) -> DateTimeMode {
+  if let Some(mode_str) = json.get("datetime_mode").and_then(|v| v.as_str()) {
+    return match mode_str {
+      "date" | "date_only" => DateTimeMode::DateOnly,
+      "time" | "time_only" => DateTimeMode::TimeOnly,
+      "hm" | "hm_only" => DateTimeMode::HmOnly,
+      _ => DateTimeMode::Full,
+    };
+  }
+  if json.get("date_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+    DateTimeMode::DateOnly
+  } else if json.get("time_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+    DateTimeMode::TimeOnly
+  } else if json.get("hm_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+    DateTimeMode::HmOnly
+  } else {
+    DateTimeMode::Full
+  }
+}
+
 #[derive(Debug, Clone)]
 pub struct Column {
   pub key:  Option<Arc<str>>,
@@ -457,7 +596,13 @@ pub struct Column {
   pub source_key: Option<Arc<str>>,
   pub format: Format,
   pub default: Option<Value>,
-  pub date_only: bool, // date only in Format::Auto mode with datetime objects
+  /// Rendering mode applied *only* when this column's own `format` is `Format::Auto` and
+  /// the source cell is already a genuine datetime (`Data::DateTime`/`Data::DateTimeIso`)
+  /// -- it has no effect on strings or numbers in that column, unlike
+  /// `Format::Date`/`Format::Time`/`Format::Hm`/`Format::DateTime`, which force *any*
+  /// cell type through date/time interpretation. Overrides the row-wide
+  /// `RowOptionSet::datetime_mode` default when set to anything other than `Full`.
+  pub datetime_mode: DateTimeMode,
   pub decimal_comma: bool, // parse as euro number format
 }
 
@@ -465,19 +610,19 @@ impl Column {
 
   /// build new column with an optional key name only
   pub fn new(key_opt: Option<&str>) -> Self {
-    Self::from_key_ref_with_format(key_opt, Format::Auto, None, false, false)
+    Self::from_key_ref_with_format(key_opt, Format::Auto, None, DateTimeMode::Full, false)
   }
 
   /// build new column data type override and optional default
   pub fn new_format(fmt: Format, default: Option<Value>) -> Self {
-    Self::from_key_ref_with_format(None, fmt, default, false, false)
+    Self::from_key_ref_with_format(None, fmt, default, DateTimeMode::Full, false)
   }
 
   /// build a column override matched by its natural (auto-detected) key rather than
   /// by position, e.g. to rename and/or reformat a single field out of many without
   /// needing to enumerate every column ahead of it.
-  pub fn from_source_key_with_format(source_key: &str, key_opt: Option<&str>, format: Format, default: Option<Value>, date_only: bool, decimal_comma: bool) -> Self {
-    let mut col = Self::from_key_ref_with_format(key_opt, format, default, date_only, decimal_comma);
+  pub fn from_source_key_with_format(source_key: &str, key_opt: Option<&str>, format: Format, default: Option<Value>, datetime_mode: DateTimeMode, decimal_comma: bool) -> Self {
+    let mut col = Self::from_key_ref_with_format(key_opt, format, default, datetime_mode, decimal_comma);
     col.source_key = Some(Arc::from(source_key));
     col
   }
@@ -506,10 +651,7 @@ impl Column {
       },
       None => None
     };
-    let date_only = match json.get("date_only") {
-      Some(date_val) => date_val.as_bool().unwrap_or(false),
-      None => false
-    };
+    let datetime_mode = datetime_mode_from_json(json);
     let dec_commas_keys = ["decimal_comma", "dec_comma"];
     let mut decimal_comma = false;
 
@@ -520,9 +662,9 @@ impl Column {
       }
     }
     if let Some(src) = source_key {
-      Column::from_source_key_with_format(src, key_opt, fmt, default, date_only, decimal_comma)
+      Column::from_source_key_with_format(src, key_opt, fmt, default, datetime_mode, decimal_comma)
     } else {
-      Column::from_key_ref_with_format(key_opt, fmt, default, date_only, decimal_comma)
+      Column::from_key_ref_with_format(key_opt, fmt, default, datetime_mode, decimal_comma)
     }
 }
 
@@ -541,8 +683,8 @@ impl Column {
   }
 
   #[allow(dead_code)]
-  pub fn set_date_only(mut self, val: bool) -> Self {
-    self.date_only = val;
+  pub fn set_datetime_mode(mut self, val: DateTimeMode) -> Self {
+    self.datetime_mode = val;
     self
   }
 
@@ -552,7 +694,7 @@ impl Column {
     self
   }
 
-  pub fn from_key_ref_with_format(key_opt: Option<&str>, format: Format, default: Option<Value>, date_only: bool, decimal_comma: bool) -> Self {
+  pub fn from_key_ref_with_format(key_opt: Option<&str>, format: Format, default: Option<Value>, datetime_mode: DateTimeMode, decimal_comma: bool) -> Self {
     let mut key = None;
     if let Some(k_str) = key_opt {
       key = Some(Arc::from(k_str));
@@ -562,7 +704,7 @@ impl Column {
       source_key: None,
       format,
       default,
-      date_only,
+      datetime_mode,
       decimal_comma
     }
   }
@@ -581,17 +723,17 @@ impl Column {
       "source_key": self.source_key_name(),
       "format": self.format.to_string(),
       "default": self.default,
-      "date_only": self.date_only,
+      "datetime_mode": self.datetime_mode.to_string(),
       "decimal_comma": self.decimal_comma
     })
   }
 
   pub fn to_line(&self) -> String {
-    let date_only_str = if self.date_only {
-      ", date only"
+    let datetime_mode_str = if self.datetime_mode != DateTimeMode::Full {
+      format!(", {}", self.datetime_mode)
     } else {
-      ""
-    }.to_owned();
+      "".to_string()
+    };
     let def_string = if let Some(def_val) = self.default.clone() {
       format!("default: {}", def_val)
     } else {
@@ -612,7 +754,7 @@ impl Column {
       self.key_name(),
       self.format,
       def_string,
-      date_only_str,
+      datetime_mode_str,
       comma_str,
       source_str)
   }
@@ -829,6 +971,18 @@ impl FieldNameMode {
   pub fn keep_headers(&self) -> bool {
     !self.override_headers()
   }
+
+  /// The always-fallback variant of this style -- A1 letters or C01 numbers regardless
+  /// of whether real header text is available. Used when no row should ever be treated
+  /// as a source of header text at all (e.g. `omit_header`), as opposed to the "Auto"
+  /// variants' normal behavior of falling back only when text happens to be missing.
+  pub fn forced_fallback(&self) -> Self {
+    if self.use_c01() {
+      Self::NumPadded
+    } else {
+      Self::A1
+    }
+  }
 }
 
 impl std::fmt::Display for FieldNameMode {
@@ -858,6 +1012,55 @@ mod tests {
     let (true_keys, false_keys) = match_custom_truthy("tr:si,no").unwrap();
     assert_eq!("si", true_keys);
     assert_eq!("no", false_keys);
+  }
+
+  #[test]
+  fn test_first_data_row_index_defaults_to_none_when_both_unset() {
+    // No additional gating when neither header_row nor data_row_index is set -- callers
+    // should skip the check entirely rather than compute a value that changes nothing.
+    let opts = OptionSet::new("x.xlsx");
+    assert_eq!(opts.first_data_row_index(), None);
+  }
+
+  #[test]
+  fn test_first_data_row_index_defaults_to_right_after_header_row() {
+    // header_row=2 (0-based); with no explicit data_row_index, data starts immediately
+    // after, at 0-based row 3.
+    let opts = OptionSet::new("x.xlsx").header_row(2);
+    assert_eq!(opts.first_data_row_index(), Some(3));
+  }
+
+  #[test]
+  fn test_first_data_row_index_honors_explicit_gap() {
+    // header_row=2, data_row_index=4 (both 0-based) -- row 3 (the row directly below the
+    // header) is a gap that gets skipped.
+    let opts = OptionSet::new("x.xlsx").header_row(2).data_row_index(4);
+    assert_eq!(opts.first_data_row_index(), Some(4));
+  }
+
+  #[test]
+  fn test_first_data_row_index_honors_data_row_equal_to_header() {
+    // data_row_index equal to the header row is a legitimate (if rare) configuration --
+    // e.g. a CSV with predefined/external headers where no line is actually consumed as
+    // a header -- so it's honored literally, not silently bumped to header_row + 1.
+    let opts = OptionSet::new("x.xlsx").header_row(2).data_row_index(2);
+    assert_eq!(opts.first_data_row_index(), Some(2));
+  }
+
+  #[test]
+  fn test_first_data_row_index_ignores_data_row_before_header() {
+    // data_row_index set strictly *before* the header row is nonsensical -- falls back
+    // to "immediately after the header row" instead of producing zero data rows.
+    let opts = OptionSet::new("x.xlsx").header_row(2).data_row_index(0);
+    assert_eq!(opts.first_data_row_index(), Some(3));
+  }
+
+  #[test]
+  fn test_first_data_row_index_with_only_data_row_set() {
+    // header_row unset (defaults to 0); data_row_index=1 skips over row 0 (the header)
+    // even though header_row itself was never explicitly set.
+    let opts = OptionSet::new("x.xlsx").data_row_index(1);
+    assert_eq!(opts.first_data_row_index(), Some(1));
   }
 
   #[test]

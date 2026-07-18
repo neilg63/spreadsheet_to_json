@@ -170,7 +170,7 @@ pub(crate) fn is_not_header_row(
 #[cfg(test)]
 mod tests {
 
-    use crate::Format;
+    use crate::{DateTimeMode, Format};
 
     use super::*;
 
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(natural_keys, vec!["full_name", "height_cm", "weight_kg"]);
 
         let overrides = vec![
-            Column::from_source_key_with_format("weight_kg", Some("weight"), Format::Integer, None, false, false),
+            Column::from_source_key_with_format("weight_kg", Some("weight"), Format::Integer, None, DateTimeMode::Full, false),
         ];
         let resolved = resolve_columns(&overrides, &natural_keys);
         assert_eq!(resolved.len(), 3);
@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(natural_keys, vec!["weight_kg"]);
 
         let overrides = vec![
-            Column::from_source_key_with_format("Weight Kg", Some("weight"), Format::Auto, None, false, false),
+            Column::from_source_key_with_format("Weight Kg", Some("weight"), Format::Auto, None, DateTimeMode::Full, false),
         ];
         let resolved = resolve_columns(&overrides, &natural_keys);
         assert_eq!(resolved[0].key_name(), "weight");
@@ -268,7 +268,7 @@ mod tests {
         let first_row = ["full_name", "height_cm"].map(|s| s.to_string());
         let natural_keys = natural_column_keys(&first_row, &FieldNameMode::AutoA1);
         let overrides = vec![
-            Column::from_source_key_with_format("nonexistent_field", Some("oops"), Format::Auto, None, false, false),
+            Column::from_source_key_with_format("nonexistent_field", Some("oops"), Format::Auto, None, DateTimeMode::Full, false),
         ];
         let resolved = resolve_columns(&overrides, &natural_keys);
         // no column matched "nonexistent_field", so nothing changes -- silently ignored
@@ -297,15 +297,15 @@ mod tests {
         // header labels as captured from the top row
         let first_row = ["Viscosity", "Rating", "", ""].map(|s| s.to_string());
         let cols = vec![
-            Column::from_key_ref_with_format(None, Format::Float, None, false, false),
+            Column::from_key_ref_with_format(None, Format::Float, None, DateTimeMode::Full, false),
             Column::from_key_ref_with_format(
                 Some("points"),
                 Format::Decimal(3),
                 None,
-                false,
+                DateTimeMode::Full,
                 false,
             ),
-            Column::from_key_ref_with_format(Some("adjusted"), Format::Float, None, false, false),
+            Column::from_key_ref_with_format(Some("adjusted"), Format::Float, None, DateTimeMode::Full, false),
         ];
         let headers = build_header_keys(&first_row, &cols, &FieldNameMode::AutoA1);
         // should be lower-cased as `viscosity`

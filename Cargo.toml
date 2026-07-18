@@ -21,3 +21,6 @@ indexmap = { version = "^2.14.0", features = ["serde"] }
 serde = { version = "^1.0.228", features = ["derive", "serde_derive"] }
 serde_json = { version = "^1.0.150", features = ["preserve_order"] }
 tokio = { version = ">=1.52.0, <2.0.0", features = ["full"] }
+
+[dev-dependencies]
+rust_xlsxwriter = "0.89"

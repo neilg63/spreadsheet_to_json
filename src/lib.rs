@@ -1,6 +1,7 @@
 pub mod options;
 pub mod headers;
 pub mod data_set;
+mod detect;
 pub mod reader;
 pub use is_truthy;
 pub mod helpers;

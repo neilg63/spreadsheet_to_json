@@ -9,6 +9,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::data_set::*;
+use crate::detect::{resolve_header_and_data_rows, DETECT_SAMPLE_SIZE};
 use crate::error::GenericError;
 use alphanumeric::*;
 use crate::headers::*;
@@ -16,6 +17,7 @@ use crate::helpers::float_value;
 use crate::helpers::string_value;
 use is_truthy::*;
 use crate::round_decimal::RoundDecimal;
+use crate::DateTimeMode;
 use crate::Extension;
 use crate::Format;
 use crate::OptionSet;
@@ -141,11 +143,17 @@ async fn read_multiple_worksheets(
         let range = workbook.worksheet_range(&sheet_ref.clone())?;
         let mut headers: Vec<String> = vec![];
         let mut has_headers = false;
-        let capture_headers = !opts.omit_header;
         let mut rows: Vec<IndexMap<String, Value>> =
             Vec::with_capacity(if capture_rows { max_rows } else { 0 });
         let mut row_index = 0;
-        let header_row_index = opts.header_row_index();
+        let detected = resolve_header_and_data_rows(opts, || {
+            range.rows().take(DETECT_SAMPLE_SIZE)
+                .map(|row| row.iter().map(|c| c.to_string()).collect())
+                .collect()
+        });
+        let first_data_row_index = detected.data_index;
+        let capture_headers = detected.header_index.is_some();
+        let header_row_index = detected.header_index.unwrap_or(0);
         let mut col_keys: Vec<String> = vec![];
         let columns = if sheet_index == 0 {
             opts.rows.columns.clone()
@@ -154,13 +162,23 @@ async fn read_multiple_worksheets(
         };
         let mut resolved_row_opts = opts.rows.clone();
         let match_header_row_below = capture_headers && header_row_index > 0;
-        if let Some(first_row) = range.headers() {
-            let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+        if capture_headers {
+            if let Some(first_row) = range.headers() {
+                let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+                let resolved_columns = resolve_columns(&columns, &natural_keys);
+                headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+                resolved_row_opts.columns = resolved_columns;
+                has_headers = !match_header_row_below;
+                col_keys = first_row;
+            }
+        } else {
+            let num_cols = range.get_size().1;
+            let blank = vec![String::new(); num_cols];
+            let natural_keys = natural_column_keys(&blank, &opts.field_mode);
             let resolved_columns = resolve_columns(&columns, &natural_keys);
-            headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+            headers = build_header_keys(&blank, &resolved_columns, &opts.field_mode.forced_fallback());
             resolved_row_opts.columns = resolved_columns;
-            has_headers = !match_header_row_below;
-            col_keys = first_row;
+            has_headers = true;
         }
         let total = range.get_size().0;
         if capture_rows || match_header_row_below {
@@ -178,7 +196,7 @@ async fn read_multiple_worksheets(
                 if row_index > max_row_count {
                     break;
                 }
-                if match_header_row_below && (row_index + 1) == header_row_index {
+                if match_header_row_below && row_index == header_row_index {
                     let h_row = row
                         .iter()
                         .map(|c| c.to_string().to_snake_case())
@@ -188,9 +206,15 @@ async fn read_multiple_worksheets(
                     headers = build_header_keys(&h_row, &resolved_columns, &opts.field_mode);
                     resolved_row_opts.columns = resolved_columns;
                     has_headers = true;
-                } else if (has_headers || !capture_headers) && capture_rows {
-                    let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
-                    if is_not_header_row(&raw_values, row_index, &col_keys) {
+                } else if (has_headers || !capture_headers) && capture_rows
+                    && row_index >= first_data_row_index {
+                    let is_real_data = if capture_headers {
+                        let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                        is_not_header_row(&raw_values, row_index, &col_keys)
+                    } else {
+                        true
+                    };
+                    if is_real_data {
                         let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                         rows.push(row_map);
                     }
@@ -219,21 +243,40 @@ pub async fn read_single_worksheet(
     let mut headers: Vec<String> = vec![];
     let mut col_keys: Vec<String> = vec![];
     let mut has_headers = false;
-    let capture_headers = !opts.omit_header;
     let mut rows: Vec<IndexMap<String, Value>> =
         Vec::with_capacity(if capture_rows { max_rows } else { 0 });
     let mut row_index = 0;
-    let header_row_index = opts.header_row_index();
+    let detected = resolve_header_and_data_rows(opts, || {
+        range.rows().take(DETECT_SAMPLE_SIZE)
+            .map(|row| row.iter().map(|c| c.to_string()).collect())
+            .collect()
+    });
+    let first_data_row_index = detected.data_index;
+    // No row is consumed as a header-text source for --omit-header, *or* when detection
+    // found no confident header row at all (see DetectedRows::header_index) -- both
+    // cases fall back to A1/C01-style names instead of deriving them from row text.
+    let capture_headers = detected.header_index.is_some();
+    let header_row_index = detected.header_index.unwrap_or(0);
     let match_header_row_below = capture_headers && header_row_index > 0;
     let mut resolved_row_opts = opts.rows.clone();
 
-    if let Some(first_row) = range.headers() {
-        let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+    if capture_headers {
+        if let Some(first_row) = range.headers() {
+            let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
+            let resolved_columns = resolve_columns(&columns, &natural_keys);
+            headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+            resolved_row_opts.columns = resolved_columns;
+            has_headers = !match_header_row_below;
+            col_keys = first_row;
+        }
+    } else {
+        let num_cols = range.get_size().1;
+        let blank = vec![String::new(); num_cols];
+        let natural_keys = natural_column_keys(&blank, &opts.field_mode);
         let resolved_columns = resolve_columns(&columns, &natural_keys);
-        headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
+        headers = build_header_keys(&blank, &resolved_columns, &opts.field_mode.forced_fallback());
         resolved_row_opts.columns = resolved_columns;
-        has_headers = !match_header_row_below;
-        col_keys = first_row;
+        has_headers = true;
     }
     let total = range.get_size().0;
     if capture_rows || match_header_row_below {
@@ -251,7 +294,7 @@ pub async fn read_single_worksheet(
             if row_index > max_row_count {
                 break;
             }
-            if match_header_row_below && (row_index + 1) == header_row_index {
+            if match_header_row_below && row_index == header_row_index {
                 let h_row = row
                     .iter()
                     .map(|c| c.to_string().to_snake_case())
@@ -261,10 +304,18 @@ pub async fn read_single_worksheet(
                 headers = build_header_keys(&h_row, &resolved_columns, &opts.field_mode);
                 resolved_row_opts.columns = resolved_columns;
                 has_headers = true;
-            } else if (has_headers || !capture_headers) && capture_rows {
+            } else if (has_headers || !capture_headers) && capture_rows
+                && row_index >= first_data_row_index {
                 // only capture rows if headers are either omitted or have already been captured
-                let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
-                if is_not_header_row(&raw_values, row_index, &col_keys) {
+                let is_real_data = if capture_headers {
+                    let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                    is_not_header_row(&raw_values, row_index, &col_keys)
+                } else {
+                    // no header row was consumed, so there's no header text to
+                    // self-exclude a duplicate row against
+                    true
+                };
+                if is_real_data {
                     let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
                     rows.push(row_map);
                 }
@@ -273,23 +324,29 @@ pub async fn read_single_worksheet(
         }
     }
     if let Some(save_method) = save_opt {
-        let mut row_iter = range.rows();
+        // Skip everything before first_data_row_index (the header row itself, and any
+        // title/notes/gap rows above it) -- this used to just stream from the true start
+        // of the sheet regardless of header_row_index/data_row_index, silently exporting
+        // notes rows as bogus data records.
         let mut save_count: usize = 0;
-        if let Some(first_row) = row_iter.next() {
-            let raw_values: Vec<String> = first_row.iter().map(|c| c.to_string()).collect();
-            if is_not_header_row(&raw_values, 0, &col_keys) {
-                let first_row_map = workbook_row_to_map(first_row, &resolved_row_opts, &headers);
-                save_method(first_row_map)?;
-                save_count += 1;
-            }
-        }
-        for row in row_iter {
+        for (idx, row) in range.rows().enumerate() {
             if save_count >= max_rows {
                 break;
             }
-            let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-            save_method(row_map)?;
-            save_count += 1;
+            if idx < first_data_row_index {
+                continue;
+            }
+            let is_real_data = if capture_headers {
+                let raw_values: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                is_not_header_row(&raw_values, idx, &col_keys)
+            } else {
+                true
+            };
+            if is_real_data {
+                let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
+                save_method(row_map)?;
+                save_count += 1;
+            }
         }
     }
 
@@ -299,6 +356,13 @@ pub async fn read_single_worksheet(
 
 /// Process a CSV/TSV file asynchronously with an optional row save method
 /// and output reference (file or database table reference)
+///
+/// Reads with `has_headers(false)` and drives header/gap/data classification manually by
+/// 0-based line index (mirroring the calamine path in `read_single_worksheet`) rather than
+/// relying on the `csv` crate's own implicit "always skip the first line" behavior --
+/// needed to honor `header_row`/`data_row_index` (including the case where they're equal:
+/// a CSV with predefined/external headers where no line is actually consumed as a header,
+/// e.g. `omit_header` with a fixed schema via `--keys`).
 pub async fn read_csv_core<'a>(
     path_data: &PathData<'a>,
     opts: &OptionSet,
@@ -311,52 +375,99 @@ pub async fn read_csv_core<'a>(
     };
     if let Ok(mut rdr) = ReaderBuilder::new()
         .delimiter(separator)
+        .has_headers(false)
+        // Notes/title rows before the real header (header_row > 0) commonly have a
+        // different field count than the data rows below them -- without this, the
+        // csv crate rejects every record as malformed once row 0's width doesn't match
+        // the rest of the file.
+        .flexible(true)
         .from_path(path_data.path())
     {
-        let capture_header = !opts.omit_header;
         let capture_rows = opts.capture_rows();
         let max_line_usize = opts.max_rows();
+        // Sampling (when actually needed for detection) opens a fresh, short-lived reader
+        // rather than reusing `rdr` -- csv::Reader is a moving cursor, so peeking ahead on
+        // the same reader would consume records the main pass below still needs.
+        let detected = resolve_header_and_data_rows(opts, || {
+            let mut sample_rows = Vec::new();
+            if let Ok(mut sample_rdr) = ReaderBuilder::new()
+                .delimiter(separator)
+                .has_headers(false)
+                .flexible(true)
+                .from_path(path_data.path())
+            {
+                for record in sample_rdr.records().take(DETECT_SAMPLE_SIZE).flatten() {
+                    sample_rows.push(record.iter().map(|s| s.to_string()).collect());
+                }
+            }
+            sample_rows
+        });
+        let first_data_row_index = detected.data_index;
+        // No line is a header source for --omit-header, *or* when detection found no
+        // confident header row at all (see DetectedRows::header_index) -- both fall
+        // back to lazily-built A1/C01-style names below.
+        let capture_header = detected.header_index.is_some();
+        let header_row_index = detected.header_index.unwrap_or(0);
+
         let mut rows: Vec<IndexMap<String, Value>> =
             Vec::with_capacity(if capture_rows { max_line_usize } else { 0 });
-        let mut line_count = 0;
-
         let mut headers: Vec<String> = vec![];
         let mut resolved_row_opts = opts.rows.clone();
-        if capture_header {
-            if let Ok(hdrs) = rdr.headers() {
-                headers = hdrs.into_iter().map(|s| s.to_owned()).collect();
-            }
-            let columns = opts.rows.columns.clone();
-            let natural_keys = natural_column_keys(&headers, &opts.field_mode);
-            let resolved_columns = resolve_columns(&columns, &natural_keys);
-            headers = build_header_keys(&headers, &resolved_columns, &opts.field_mode);
-            resolved_row_opts.columns = resolved_columns;
-        }
+        // With omit_header, no line is ever a header source -- fallback (A1/C01) keys are
+        // derived once, lazily, from the first eligible data row's column count.
+        let mut fallback_keys_built = false;
 
-        let mut total = 0;
-        if capture_rows {
-            for result in rdr.records() {
-                if line_count >= max_line_usize {
-                    break;
-                }
-                if let Some(row) = csv_row_result_to_values(result, &resolved_row_opts) {
-                    rows.push(to_index_map(&row, &headers));
-                    line_count += 1;
-                }
+        let mut total: usize = 0;
+        let mut line_count: usize = 0;
+        let mut row_index: usize = 0;
+
+        for result in rdr.records() {
+            let Ok(record) = result else {
+                row_index += 1;
+                continue;
+            };
+            // "total"/num_rows is a structural line count for the whole file, matching
+            // the calamine path's range.get_size().0 -- it includes the header row (and
+            // any skipped gap rows), not just rows that end up classified as data.
+            total += 1;
+
+            if capture_header && row_index == header_row_index {
+                let raw: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+                let natural_keys = natural_column_keys(&raw, &opts.field_mode);
+                let resolved_columns = resolve_columns(&opts.rows.columns, &natural_keys);
+                headers = build_header_keys(&raw, &resolved_columns, &opts.field_mode);
+                resolved_row_opts.columns = resolved_columns;
+                row_index += 1;
+                continue;
             }
-            total = line_count + rdr.records().count() + 1;
-        } else if let Some(save_method) = save_opt {
-            for result in rdr.records() {
-                if let Some(row) = csv_row_result_to_values(result, &resolved_row_opts) {
+
+            if row_index < first_data_row_index {
+                row_index += 1;
+                continue;
+            }
+
+            if !capture_header && !fallback_keys_built {
+                let blank: Vec<String> = record.iter().map(|_| String::new()).collect();
+                let resolved_columns = resolve_columns(&opts.rows.columns, &natural_column_keys(&blank, &opts.field_mode));
+                headers = build_header_keys(&blank, &resolved_columns, &opts.field_mode.forced_fallback());
+                resolved_row_opts.columns = resolved_columns;
+                fallback_keys_built = true;
+            }
+
+            if capture_rows {
+                if line_count < max_line_usize {
+                    if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
+                        rows.push(to_index_map(&row, &headers));
+                        line_count += 1;
+                    }
+                }
+            } else if let Some(save_method) = save_opt.as_ref() {
+                if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
                     let row_map = to_index_map(&row, &headers);
                     save_method(row_map)?;
-                    total += 1;
                 }
             }
-        } else {
-            if let Ok(mut count_rdr) = ReaderBuilder::new().from_path(path_data.path()) {
-                total = count_rdr.records().count();
-            }
+            row_index += 1;
         }
         let info = WorkbookInfo::simple(path_data);
         let ds = DataSet::from_count_and_rows(total, rows, opts);
@@ -392,14 +503,15 @@ fn workbook_cell_to_value(cell: &Data, opts: &RowOptionSet, c_index: usize) -> V
     let col = opts.column(c_index);
     let format = col.map_or(Format::Auto, |c| c.format.to_owned());
     let def_val = col.and_then(|c| c.default.clone());
+    let col_mode = col.map_or(DateTimeMode::Full, |c| c.datetime_mode);
 
-    let date_only = resolve_date_only(&format, opts.date_only);
+    let mode = resolve_datetime_mode(&format, col_mode, opts.datetime_mode);
 
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
         Data::Float(f) => process_float_value(*f, format),
-        Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, date_only),
-        Data::DateTime(d) => process_excel_datetime_value(d, def_val, date_only),
+        Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, mode),
+        Data::DateTime(d) => process_excel_datetime_value(d, def_val, mode),
         Data::Bool(b) => Value::Bool(*b),
         Data::String(s) => process_string_value(s, format, def_val),
         Data::Empty => def_val.unwrap_or(Value::Null),
@@ -407,14 +519,22 @@ fn workbook_cell_to_value(cell: &Data, opts: &RowOptionSet, c_index: usize) -> V
     }
 }
 
-/// A column's own Format::Date/Format::DateTime override takes precedence over the
-/// row-wide --date-only default; any other format (including Format::Auto) falls back
-/// to that row-wide default, unchanged from before this override existed.
-fn resolve_date_only(format: &Format, row_date_only: bool) -> bool {
+/// A column's own Format::Date/Format::Time/Format::Hm/Format::DateTime/
+/// Format::DateTimeSimple override takes precedence over everything else, since it
+/// forces date/time interpretation regardless of the cell's native type. Next is the
+/// column's own `datetime_mode` (only meaningful on a Format::Auto column, restricted to
+/// cells that are already genuine datetimes -- see `Column::datetime_mode`'s doc
+/// comment). Anything else falls back to the row-wide default. No override anywhere
+/// means the full datetime.
+fn resolve_datetime_mode(format: &Format, col_mode: DateTimeMode, row_mode: DateTimeMode) -> DateTimeMode {
     match format {
-        Format::Date => true,
-        Format::DateTime => false,
-        _ => row_date_only,
+        Format::Date => DateTimeMode::DateOnly,
+        Format::Time => DateTimeMode::TimeOnly,
+        Format::Hm => DateTimeMode::HmOnly,
+        Format::DateTime => DateTimeMode::Full,
+        Format::DateTimeSimple => DateTimeMode::Simple,
+        _ if col_mode != DateTimeMode::Full => col_mode,
+        _ => row_mode,
     }
 }
 
@@ -430,29 +550,81 @@ fn process_float_value(value: f64, format: Format) -> Value {
 fn process_excel_datetime_value(
     datetime: &calamine::ExcelDateTime,
     def_val: Option<Value>,
-    date_only: bool,
+    mode: DateTimeMode,
 ) -> Value {
-    let dt_ref = datetime.as_datetime().map_or_else(
+    // Excel has no true time-only type -- a cell formatted as plain "hh:mm" (not the
+    // bracketed "[h]:mm:ss" duration format) is really a full datetime serial with zero
+    // elapsed days, which calamine converts by landing on its epoch ("1899-12-31" in the
+    // 1900 date system). Carrying that placeholder date through to a full ISO datetime
+    // string would misrepresent a genuine time-of-day value as if it were a real date,
+    // so a cell with no real date component (serial < 1.0) is auto-rendered as a bare
+    // time even without an explicit Format::Time/--time-only request -- for both Full
+    // and Simple modes, since Simple is still "the whole datetime", just reformatted.
+    let auto_time_only = matches!(mode, DateTimeMode::Full | DateTimeMode::Simple) && datetime.as_f64() < 1.0;
+    datetime.as_datetime().map_or_else(
         || def_val.unwrap_or(Value::Null),
         |dt| {
-            let formatted_date = if date_only {
-                dt.format("%Y-%m-%d").to_string()
-            } else {
-                dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+            // Milliseconds are only meaningful in the default Full mode's genuine
+            // full-datetime output, kept for JS-interop compatibility; every other mode
+            // -- including Full/Simple's own bare-time fallback above -- renders plain
+            // "HH:MM:SS", since a value that's already been reduced to seconds-only
+            // precision (or came from an Excel "hh:mm"-formatted cell with no seconds
+            // at all) gains nothing from a trailing ".000".
+            let formatted_date = match mode {
+                DateTimeMode::DateOnly => dt.format("%Y-%m-%d").to_string(),
+                DateTimeMode::TimeOnly => dt.format("%H:%M:%S").to_string(),
+                DateTimeMode::HmOnly => dt.format("%H:%M").to_string(),
+                DateTimeMode::Simple if auto_time_only => dt.format("%H:%M:%S").to_string(),
+                DateTimeMode::Simple => dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                DateTimeMode::Full if auto_time_only => dt.format("%H:%M:%S").to_string(),
+                DateTimeMode::Full => dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             };
             Value::String(formatted_date)
         },
-    );
-    dt_ref
+    )
 }
 
-fn process_iso_datetime_value(dt_str: &str, def_val: Option<Value>, date_only: bool) -> Value {
-    if date_only {
-        iso_fuzzy_to_date_string(dt_str)
-            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String)
-    } else {
-        iso_fuzzy_to_datetime_string(dt_str)
-            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String)
+fn process_iso_datetime_value(dt_str: &str, def_val: Option<Value>, mode: DateTimeMode) -> Value {
+    match mode {
+        DateTimeMode::DateOnly => iso_fuzzy_to_date_string(dt_str)
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
+        DateTimeMode::TimeOnly => iso_fuzzy_to_datetime_string(dt_str)
+            .and_then(|full| extract_time_portion(&full, false))
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
+        DateTimeMode::HmOnly => iso_fuzzy_to_datetime_string(dt_str)
+            .and_then(|full| extract_time_portion(&full, true))
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
+        DateTimeMode::Simple => iso_fuzzy_to_datetime_string(dt_str)
+            .map(|full| simplify_datetime_string(&full))
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
+        DateTimeMode::Full => iso_fuzzy_to_datetime_string(dt_str)
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
+    }
+}
+
+/// Extracts just the time-of-day portion from a full ISO-8601 datetime string like
+/// "2023-06-15T10:17:00.000Z" -- the shape iso_fuzzy_to_datetime_string always produces
+/// -- as "HH:MM:SS" or, when `hm_only`, just "HH:MM"; milliseconds are always dropped,
+/// matching process_excel_datetime_value's native-cell equivalent. fuzzy-datetime itself
+/// has no time-only concept by design (it stays scoped to date/datetime completion and
+/// order-guessing); this is purely string surgery on its output for
+/// Format::Time/Format::Hm/--time-only/--hm-only, not a new parsing capability.
+fn extract_time_portion(full_datetime_str: &str, hm_only: bool) -> Option<String> {
+    let time_part = full_datetime_str.split('T').nth(1)?;
+    let time_part = time_part.trim_end_matches('Z');
+    let len = if hm_only { 5 } else { 8 };
+    time_part.get(0..len).map(str::to_string)
+}
+
+/// Strips the trailing ".mmmZ" milliseconds-and-Z suffix from a full ISO-8601 datetime
+/// string like "2023-06-15T10:17:00.000Z", leaving "2023-06-15T10:17:00" -- for
+/// Format::DateTimeSimple/--simple, where the millisecond precision and JS-interop-style
+/// trailing Z (both there for the default Full mode) are unwanted noise.
+fn simplify_datetime_string(full_datetime_str: &str) -> String {
+    let trimmed = full_datetime_str.trim_end_matches('Z');
+    match trimmed.split_once('.') {
+        Some((base, _)) => base.to_string(),
+        None => trimmed.to_string(),
     }
 }
 
@@ -469,6 +641,15 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
         Format::Float => process_numeric_value(value, def_val, float_value),
         Format::Date => process_date_value(value, def_val, iso_fuzzy_to_date_string),
         Format::DateTime => process_date_value(value, def_val, iso_fuzzy_to_datetime_string),
+        Format::DateTimeSimple => process_date_value(value, def_val, |s| {
+            iso_fuzzy_to_datetime_string(s).map(|full| simplify_datetime_string(&full))
+        }),
+        Format::Time => process_date_value(value, def_val, |s| {
+            iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, false))
+        }),
+        Format::Hm => process_date_value(value, def_val, |s| {
+            iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, true))
+        }),
         _ => Value::String(value.to_owned()),
     }
 }
@@ -524,7 +705,6 @@ fn csv_row_result_to_values(
 
 // convert CSV cell &str value to a polymorphic serde_json::VALUE
 fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Value {
-    let has_number = cell.to_first_number::<f64>().is_some();
     // clean cell to check if it's numeric
     let col = opts.column(index);
     let (fmt, euro_num_mode) = if let Some(c) = col {
@@ -532,6 +712,33 @@ fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Valu
     } else {
         (Format::Auto, opts.decimal_comma)
     };
+    // A column's own Format::Date/Format::Time/Format::Hm/Format::DateTime/
+    // Format::DateTimeSimple override is checked before any numeric parsing, since a
+    // date-like string ("2023-06-15") can
+    // otherwise be misread as starting with a plain number ("2023") and fall through to
+    // Value::Number instead of going through fuzzy-datetime at all.
+    let def_val = col.and_then(|c| c.default.clone());
+    match fmt {
+        Format::Date => return process_date_value(cell, def_val, iso_fuzzy_to_date_string),
+        Format::DateTime => return process_date_value(cell, def_val, iso_fuzzy_to_datetime_string),
+        Format::DateTimeSimple => {
+            return process_date_value(cell, def_val, |s| {
+                iso_fuzzy_to_datetime_string(s).map(|full| simplify_datetime_string(&full))
+            })
+        }
+        Format::Time => {
+            return process_date_value(cell, def_val, |s| {
+                iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, false))
+            })
+        }
+        Format::Hm => {
+            return process_date_value(cell, def_val, |s| {
+                iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, true))
+            })
+        }
+        _ => {}
+    }
+    let has_number = cell.to_first_number::<f64>().is_some();
     let num_cell = if has_number {
         let euro_num_mode = uses_decimal_comma(cell, euro_num_mode);
         if euro_num_mode {
@@ -606,6 +813,206 @@ mod tests {
     use serde_json::json;
     use std::path;
 
+    /// Generates a workbook laid out the way many real-world spreadsheets are: a title
+    /// row, a notes row, the real header row, a blank gap row, then the actual data --
+    /// for testing header_row/data_row_index against a realistic gap scenario. Row 0
+    /// (0-based) "Report Title", row 1 "Generated 2026-01-01", row 2 header ("sku",
+    /// "qty"), row 3 blank, rows 4-5 data (SKU001/10, SKU002/20).
+    fn gen_header_gap_fixture(filename: &str) -> String {
+        use rust_xlsxwriter::Workbook;
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "Report Title").unwrap();
+        sheet.write_string(1, 0, "Generated 2026-01-01").unwrap();
+        sheet.write_string(2, 0, "sku").unwrap();
+        sheet.write_string(2, 1, "qty").unwrap();
+        // row 3 intentionally left blank
+        sheet.write_string(4, 0, "SKU001").unwrap();
+        sheet.write_number(4, 1, 10.0).unwrap();
+        sheet.write_string(5, 0, "SKU002").unwrap();
+        sheet.write_number(5, 1, 20.0).unwrap();
+        let path = std::env::temp_dir().join(filename);
+        workbook.save(&path).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    /// The user-supplied example that motivated auto-detection: a title row, a proper
+    /// 3-column header, an explanatory-text row that only fills one cell, then real
+    /// data. header_row=1, data_row_index=3 (both 0-based) is the expected guess.
+    fn gen_auto_detect_fixture(filename: &str) -> String {
+        use rust_xlsxwriter::Workbook;
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "Sales 2025").unwrap();
+        sheet.write_string(1, 0, "region").unwrap();
+        sheet.write_string(1, 1, "team size").unwrap();
+        sheet.write_string(1, 2, "revenue").unwrap();
+        sheet.write_string(2, 0, "long explanation about the data").unwrap();
+        sheet.write_string(3, 0, "west").unwrap();
+        sheet.write_number(3, 1, 12.0).unwrap();
+        sheet.write_number(3, 2, 923456.0).unwrap();
+        sheet.write_string(4, 0, "east").unwrap();
+        sheet.write_number(4, 1, 7.0).unwrap();
+        sheet.write_number(4, 2, 817285.0).unwrap();
+        let path = std::env::temp_dir().join(filename);
+        workbook.save(&path).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_detect_header_opt_in_finds_header_and_data_row_xlsx() {
+        // detect_header is off by default for direct library use (see the field's own
+        // doc) -- callers that want auto-detection opt in explicitly via .detect_header().
+        let path = gen_auto_detect_fixture("auto_detect.xlsx");
+        let opts = OptionSet::new(&path).detect_header();
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "the explanation row must not leak through as data");
+        assert_eq!(rows[0].get("region"), Some(&json!("west")));
+        assert_eq!(rows[0].get("team_size"), Some(&json!(12.0)));
+        assert_eq!(rows[0].get("revenue"), Some(&json!(923456.0)));
+        assert_eq!(rows[1].get("region"), Some(&json!("east")));
+    }
+
+    #[test]
+    fn test_detect_header_opt_in_finds_header_and_data_row_csv() {
+        let path = write_csv_fixture(
+            "auto_detect.csv",
+            "Sales 2025\nregion,team size,revenue\nlong explanation about the data\nwest,12,923456\neast,7,817285\n",
+        );
+        let opts = OptionSet::new(&path).detect_header();
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "the explanation row must not leak through as data");
+        assert_eq!(rows[0].get("region"), Some(&json!("west")));
+        assert_eq!(rows[0].get("team_size"), Some(&json!(12)));
+        assert_eq!(rows[1].get("region"), Some(&json!("east")));
+    }
+
+    #[test]
+    fn test_detect_header_falls_back_to_fallback_naming_for_headerless_text_csv() {
+        // No header row exists at all, and there's no numeric/boolean/date signal
+        // anywhere (a content-migration file) -- detection must not consume the first
+        // row as a bogus header, losing it as data. Field names fall back to A1-style
+        // letters, same as --omit-header, since there's no header text to derive from.
+        let path = write_csv_fixture(
+            "headerless_migration.csv",
+            "welcome_msg,Welcome to our store,Bienvenue dans notre magasin\ngoodbye_msg,Thank you for visiting,Merci de votre visite\n",
+        );
+        let opts = OptionSet::new(&path).detect_header();
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "both rows must be present, none consumed as a header");
+        assert_eq!(rows[0].get("a"), Some(&json!("welcome_msg")));
+        assert_eq!(rows[0].get("b"), Some(&json!("Welcome to our store")));
+        assert_eq!(rows[1].get("a"), Some(&json!("goodbye_msg")));
+    }
+
+    #[test]
+    fn test_detect_header_falls_back_to_fallback_naming_for_headerless_text_xlsx() {
+        use rust_xlsxwriter::Workbook;
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "welcome_msg").unwrap();
+        sheet.write_string(0, 1, "Welcome to our store").unwrap();
+        sheet.write_string(0, 2, "Bienvenue dans notre magasin").unwrap();
+        sheet.write_string(1, 0, "goodbye_msg").unwrap();
+        sheet.write_string(1, 1, "Thank you for visiting").unwrap();
+        sheet.write_string(1, 2, "Merci de votre visite").unwrap();
+        let path = std::env::temp_dir().join("headerless_migration.xlsx");
+        workbook.save(&path).unwrap();
+
+        let opts = OptionSet::new(path.to_str().unwrap()).detect_header();
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "both rows must be present, none consumed as a header");
+        assert_eq!(rows[0].get("a"), Some(&json!("welcome_msg")));
+        assert_eq!(rows[1].get("a"), Some(&json!("goodbye_msg")));
+    }
+
+    #[test]
+    fn test_omit_header_uses_fallback_names_for_xlsx_not_real_header_text() {
+        // Regression: --omit-header used to be a no-op for xlsx/ods -- real header text
+        // was still used for field names regardless of the flag, because the row-0
+        // shortcut (range.headers()) ran unconditionally. Now gated on capture_headers,
+        // shared with the detect_header fallback-naming path above.
+        let sample_path = "data/sample-data-1.xlsx";
+        let opts = OptionSet::new(sample_path).omit_header();
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        assert!(result.keys.contains(&"a".to_string()), "got: {:?}", result.keys);
+        assert!(!result.keys.contains(&"id".to_string()), "got: {:?}", result.keys);
+        let rows = result.to_vec();
+        // the literal header row's own text is now the first "data" row, since no row
+        // is consumed for headers at all
+        assert_eq!(rows[0].get("a"), Some(&json!("id")));
+    }
+
+    #[test]
+    fn test_detect_header_off_by_default_leaves_notes_rows_uncleaned() {
+        // Without .detect_header(), the library falls back to its old, simple default
+        // (row 0 is the header) even on a file that has title/notes rows -- this is the
+        // behavior direct library consumers should see unless they opt in.
+        let path = gen_auto_detect_fixture("auto_detect_no_opt_in.xlsx");
+        let opts = OptionSet::new(&path);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        // row 0 ("Sales 2025") is treated as the header; every subsequent row (including
+        // the real header and the notes row) is captured as data instead of being cleaned up
+        assert_eq!(rows.len(), 4);
+    }
+
+    #[test]
+    fn test_detect_header_does_not_change_output_for_a_normal_well_formed_file() {
+        // Regression guard: with .detect_header() opted in, a file with no title/notes
+        // rows at all (row 0 is already a perfectly good header) must produce identical
+        // output to the plain default -- detection should just confirm row 0, not guess
+        // something else.
+        let sample_path = "data/sample-data-1.xlsx";
+        let opts = OptionSet::new(sample_path).max_row_count(1_000).detect_header();
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        assert_eq!(result.num_rows, 401);
+        assert_eq!(result.to_vec()[0].get("first_name"), Some(&json!("Dulce")));
+    }
+
+    #[test]
+    fn test_header_row_without_data_row_index_captures_the_gap_row_as_data() {
+        // Baseline: with only header_row set (no data_row_index), the row directly
+        // below the header is treated as data, even though it's actually a blank gap
+        // row here -- this is the pre-existing behavior data_row_index exists to fix.
+        let path = gen_header_gap_fixture("header_gap_baseline.xlsx");
+        let opts = OptionSet::new(&path).header_row(2);
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        assert_eq!(rows.len(), 3, "gap row, SKU001, SKU002");
+        assert_eq!(rows[0].get("sku"), Some(&Value::Null));
+        assert_eq!(rows[1].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(rows[2].get("sku"), Some(&json!("SKU002")));
+    }
+
+    #[test]
+    fn test_data_row_index_skips_the_gap_between_header_and_real_data() {
+        // header_row=2 (the "sku"/"qty" row), data_row_index=4 (the SKU001 row), both
+        // 0-based -- row 3, the blank gap row, is skipped entirely rather than captured
+        // as a null row.
+        let path = gen_header_gap_fixture("header_gap_with_data_row.xlsx");
+        let opts = OptionSet::new(&path).header_row(2).data_row_index(4);
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        assert_eq!(rows.len(), 2, "just SKU001 and SKU002, no gap row");
+        assert_eq!(rows[0].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(rows[0].get("qty"), Some(&json!(10.0)));
+        assert_eq!(rows[1].get("sku"), Some(&json!("SKU002")));
+        assert_eq!(rows[1].get("qty"), Some(&json!(20.0)));
+    }
+
+    #[test]
+    fn test_data_row_index_in_preview_multimode_skips_the_gap_too() {
+        // Same fixture, read via --preview (multimode) -- the gap-skipping logic is
+        // duplicated in read_multiple_worksheets, so it needs its own regression test.
+        let path = gen_header_gap_fixture("header_gap_preview.xlsx");
+        let opts = OptionSet::new(&path).header_row(2).data_row_index(4).read_mode_preview();
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let sheet_rows = result.data.first_sheet();
+        assert_eq!(sheet_rows.len(), 2, "just SKU001 and SKU002, no gap row");
+        assert_eq!(sheet_rows[0].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(sheet_rows[1].get("sku"), Some(&json!("SKU002")));
+    }
+
     #[test]
     fn test_direct_processing_xlsx() {
         let sample_path = "data/sample-data-1.xlsx";
@@ -627,7 +1034,7 @@ mod tests {
         let sample_path = "data/sample-data-1.csv";
         let mut opts = OptionSet::new(sample_path).max_row_count(2);
         opts.rows.columns = vec![
-            Column::from_source_key_with_format("weight", Some("weight_lbs"), Format::Integer, None, false, false),
+            Column::from_source_key_with_format("weight", Some("weight_lbs"), Format::Integer, None, DateTimeMode::Full, false),
         ];
 
         let result = process_spreadsheet_direct(&opts).unwrap();
@@ -645,13 +1052,19 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_date_only_prefers_column_format_over_row_default() {
-        // A column's own Format::Date/Format::DateTime overrides the row-wide
-        // --date-only default; Format::Auto (and anything else) falls back to it.
-        assert!(resolve_date_only(&Format::Date, false));
-        assert!(!resolve_date_only(&Format::DateTime, true));
-        assert!(!resolve_date_only(&Format::Auto, false));
-        assert!(resolve_date_only(&Format::Auto, true));
+    fn test_resolve_datetime_mode_prefers_column_format_over_row_defaults() {
+        // A column's own Format::Date/Format::Time/Format::DateTime overrides the
+        // row-wide default; Format::Auto (and anything else) falls back to the column's
+        // own datetime_mode next, then the row-wide default.
+        assert_eq!(resolve_datetime_mode(&Format::Date, DateTimeMode::Full, DateTimeMode::Full), DateTimeMode::DateOnly);
+        assert_eq!(resolve_datetime_mode(&Format::Time, DateTimeMode::Full, DateTimeMode::Full), DateTimeMode::TimeOnly);
+        assert_eq!(resolve_datetime_mode(&Format::Hm, DateTimeMode::Full, DateTimeMode::Full), DateTimeMode::HmOnly);
+        assert_eq!(resolve_datetime_mode(&Format::DateTimeSimple, DateTimeMode::Full, DateTimeMode::Full), DateTimeMode::Simple);
+        assert_eq!(resolve_datetime_mode(&Format::DateTime, DateTimeMode::DateOnly, DateTimeMode::TimeOnly), DateTimeMode::Full);
+        assert_eq!(resolve_datetime_mode(&Format::Auto, DateTimeMode::Full, DateTimeMode::Full), DateTimeMode::Full);
+        assert_eq!(resolve_datetime_mode(&Format::Auto, DateTimeMode::DateOnly, DateTimeMode::Full), DateTimeMode::DateOnly);
+        assert_eq!(resolve_datetime_mode(&Format::Auto, DateTimeMode::Full, DateTimeMode::TimeOnly), DateTimeMode::TimeOnly);
+        assert_eq!(resolve_datetime_mode(&Format::Auto, DateTimeMode::HmOnly, DateTimeMode::DateOnly), DateTimeMode::HmOnly);
     }
 
     #[test]
@@ -663,7 +1076,7 @@ mod tests {
         let sample_path = "data/sample-data-1.xlsx";
         let mut opts = OptionSet::new(sample_path).max_row_count(1);
         opts.rows.columns = vec![
-            Column::from_source_key_with_format("start_time", None, Format::Date, None, false, false),
+            Column::from_source_key_with_format("start_time", None, Format::Date, None, DateTimeMode::Full, false),
         ];
 
         let result = process_spreadsheet_direct(&opts).unwrap();
@@ -672,6 +1085,188 @@ mod tests {
         let start_time = first.get("start_time").expect("start_time column").as_str().unwrap();
         assert_eq!(start_time, "2023-06-15");
         assert!(!start_time.contains('T'), "should be date-only, got: {}", start_time);
+    }
+
+    #[test]
+    fn test_time_only_excel_cell_does_not_carry_the_epoch_placeholder_date() {
+        // Regression: Excel has no true time-only type -- a cell formatted as plain
+        // "hh:mm" (e.g. a recurring daily start time like "6:30") is really a full
+        // datetime serial with zero elapsed days, which calamine converts by landing on
+        // its epoch ("1899-12-31" in the 1900 date system). Formatting the whole thing
+        // as a datetime carried that meaningless placeholder date through to the output
+        // ("1899-12-31T06:30:00.000Z"); it should come back as a bare time instead.
+        use rust_xlsxwriter::{ExcelDateTime, Format as XlsxFormat, Workbook};
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        let time_fmt = XlsxFormat::new().set_num_format("hh:mm");
+        sheet.write_string(0, 0, "meal").unwrap();
+        sheet.write_string(0, 1, "start").unwrap();
+        sheet.write_string(1, 0, "Breakfast").unwrap();
+        let breakfast_time = ExcelDateTime::from_hms(6, 30, 0).unwrap();
+        sheet.write_time_with_format(1, 1, breakfast_time, &time_fmt).unwrap();
+        // a genuine full date+time, for contrast -- must still include the real date
+        sheet.write_string(2, 0, "Meeting").unwrap();
+        let meeting_dt = ExcelDateTime::from_ymd(2026, 3, 5).unwrap().and_hms(9, 0, 0).unwrap();
+        let datetime_fmt = XlsxFormat::new().set_num_format("yyyy-mm-dd hh:mm");
+        sheet.write_datetime_with_format(2, 1, meeting_dt, &datetime_fmt).unwrap();
+        let path = std::env::temp_dir().join("time_only_cell.xlsx");
+        workbook.save(&path).unwrap();
+
+        let opts = OptionSet::new(path.to_str().unwrap());
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows[0].get("start"), Some(&json!("06:30:00")));
+        assert_eq!(rows[1].get("start"), Some(&json!("2026-03-05T09:00:00.000Z")));
+    }
+
+    #[test]
+    fn test_format_time_column_override_forces_time_only_even_for_a_full_datetime() {
+        // Format::Time is an explicit override, distinct from the automatic
+        // as_f64() < 1.0 detection above -- it must strip the date component even from
+        // a cell that carries a genuine, non-epoch date, e.g. a per-column override on
+        // a "logged_at" timestamp column where only the time-of-day is wanted.
+        use rust_xlsxwriter::{ExcelDateTime, Format as XlsxFormat, Workbook};
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "logged_at").unwrap();
+        let dt = ExcelDateTime::from_ymd(2026, 3, 5).unwrap().and_hms(9, 15, 30).unwrap();
+        let datetime_fmt = XlsxFormat::new().set_num_format("yyyy-mm-dd hh:mm:ss");
+        sheet.write_datetime_with_format(1, 0, dt, &datetime_fmt).unwrap();
+        let path = std::env::temp_dir().join("format_time_override_cell.xlsx");
+        workbook.save(&path).unwrap();
+
+        let mut opts = OptionSet::new(path.to_str().unwrap());
+        opts.rows.columns = vec![
+            Column::from_source_key_with_format("logged_at", None, Format::Time, None, DateTimeMode::Full, false),
+        ];
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows[0].get("logged_at"), Some(&json!("09:15:30")));
+    }
+
+    #[test]
+    fn test_row_wide_time_only_strips_the_date_from_a_native_iso_datetime_cell() {
+        // opts.rows.datetime_mode mirrors --date-only but for the opposite end: with no
+        // per-column override, it should reduce a full ISO datetime cell down to just
+        // "HH:MM:SS.mmm" -- post-processing fuzzy-datetime's output, not a change to
+        // the fuzzy-datetime crate itself (out of scope).
+        let row_opts = RowOptionSet { datetime_mode: DateTimeMode::TimeOnly, ..Default::default() };
+        let cell = Data::DateTimeIso("2023-06-15T10:17:00.000Z".to_string());
+        assert_eq!(
+            workbook_cell_to_value(&cell, &row_opts, 0),
+            Value::String("10:17:00".to_string())
+        );
+    }
+
+    #[test]
+    fn test_row_wide_hm_only_truncates_seconds_from_a_native_datetime_cell() {
+        // --hm-only is coarser than --time-only: a start/end time or recurring daily
+        // slot is usually better read as "09:15" than "09:15:30.000".
+        let row_opts = RowOptionSet { datetime_mode: DateTimeMode::HmOnly, ..Default::default() };
+        let cell = Data::DateTimeIso("2023-06-15T09:15:30.000Z".to_string());
+        assert_eq!(
+            workbook_cell_to_value(&cell, &row_opts, 0),
+            Value::String("09:15".to_string())
+        );
+    }
+
+    #[test]
+    fn test_csv_cell_format_time_extracts_time_of_day_from_a_plain_date_string() {
+        // csv_cell_to_json_value previously had no Date/DateTime/Time handling at all --
+        // a date-like string starting with a number (e.g. "2023-06-15T10:17") could be
+        // misread by the numeric-extraction path before ever reaching fuzzy-datetime.
+        let cols = vec![Column::new_format(Format::Time, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(
+            csv_cell_to_json_value("2023-06-15T10:17:00", &row_opts, 0),
+            Value::String("10:17:00".to_string())
+        );
+    }
+
+    #[test]
+    fn test_csv_cell_format_hm_drops_seconds_too() {
+        // Format::Hm ("|hm" in --keys) is the CSV/string-cell equivalent of --hm-only,
+        // e.g. spread-cli --keys "served_from|hm" for a restaurant menu's serving times.
+        let cols = vec![Column::new_format(Format::Hm, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(
+            csv_cell_to_json_value("2023-06-15T09:15:30", &row_opts, 0),
+            Value::String("09:15".to_string())
+        );
+    }
+
+    #[test]
+    fn test_simplify_datetime_string_drops_milliseconds_and_trailing_z() {
+        assert_eq!(simplify_datetime_string("2026-07-18T18:07:34.000Z"), "2026-07-18T18:07:34");
+        // also tolerates a string with no fractional seconds or Z at all
+        assert_eq!(simplify_datetime_string("2026-07-18T18:07:34"), "2026-07-18T18:07:34");
+    }
+
+    #[test]
+    fn test_row_wide_simple_mode_strips_milliseconds_and_z_from_a_native_iso_datetime_cell() {
+        let row_opts = RowOptionSet { datetime_mode: DateTimeMode::Simple, ..Default::default() };
+        let cell = Data::DateTimeIso("2026-07-18T18:07:34.000Z".to_string());
+        assert_eq!(
+            workbook_cell_to_value(&cell, &row_opts, 0),
+            Value::String("2026-07-18T18:07:34".to_string())
+        );
+    }
+
+    #[test]
+    fn test_csv_cell_format_datetime_simple_drops_milliseconds_and_z() {
+        // Format::DateTimeSimple ("|simple" or "|ds" in --keys) is the CSV/string-cell
+        // equivalent of --simple: the full datetime, minus the JS-interop-oriented
+        // milliseconds/trailing-Z formatting used by the default Full mode.
+        let cols = vec![Column::new_format(Format::DateTimeSimple, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(
+            csv_cell_to_json_value("2026-07-18T18:07:34", &row_opts, 0),
+            Value::String("2026-07-18T18:07:34".to_string())
+        );
+    }
+
+    #[test]
+    fn test_simple_mode_still_avoids_the_epoch_placeholder_date_for_a_genuine_time_only_excel_cell() {
+        // Simple is still "the whole datetime", just reformatted -- so it must keep the
+        // same auto time-only detection as Full mode (see
+        // test_time_only_excel_cell_does_not_carry_the_epoch_placeholder_date), just
+        // without milliseconds this time.
+        use rust_xlsxwriter::{ExcelDateTime, Format as XlsxFormat, Workbook};
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        let time_fmt = XlsxFormat::new().set_num_format("hh:mm");
+        sheet.write_string(0, 0, "start").unwrap();
+        let breakfast_time = ExcelDateTime::from_hms(6, 30, 0).unwrap();
+        sheet.write_time_with_format(1, 0, breakfast_time, &time_fmt).unwrap();
+        let path = std::env::temp_dir().join("simple_mode_time_only_cell.xlsx");
+        workbook.save(&path).unwrap();
+
+        let mut opts = OptionSet::new(path.to_str().unwrap());
+        opts.rows.datetime_mode = DateTimeMode::Simple;
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows[0].get("start"), Some(&json!("06:30:00")));
+    }
+
+    #[test]
+    fn test_column_datetime_mode_applies_only_to_genuine_datetime_cells_under_format_auto() {
+        // Column::datetime_mode (distinct from Format::Date/Time/Hm/DateTime) is scoped
+        // to columns left at Format::Auto -- it only ever touches a cell that's already
+        // a genuine datetime (Data::DateTime/Data::DateTimeIso), leaving strings and
+        // numbers in the same column completely untouched, unlike an explicit Format
+        // override which would force-interpret every cell type.
+        let cols = vec![Column::from_key_ref_with_format(None, Format::Auto, None, DateTimeMode::HmOnly, false)];
+        let row_opts = RowOptionSet::simple(&cols);
+        let datetime_cell = Data::DateTimeIso("2023-06-15T09:15:30.000Z".to_string());
+        assert_eq!(
+            workbook_cell_to_value(&datetime_cell, &row_opts, 0),
+            Value::String("09:15".to_string())
+        );
+        let string_cell = Data::String("not a date".to_string());
+        assert_eq!(
+            workbook_cell_to_value(&string_cell, &row_opts, 0),
+            Value::String("not a date".to_string())
+        );
     }
 
     #[test]
@@ -713,6 +1308,75 @@ mod tests {
 
         // The source file should have 1 header row and 400 data rows
         assert_eq!(result.unwrap().num_rows, 401);
+    }
+
+    /// Writes raw CSV text to a temp file for testing header_row/data_row_index/
+    /// omit_header against CSV specifically (calamine fixtures need a real xlsx writer,
+    /// but CSV is plain text -- no generator needed).
+    fn write_csv_fixture(filename: &str, content: &str) -> String {
+        let path = std::env::temp_dir().join(filename);
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_csv_header_row_and_data_row_index_skip_a_gap() {
+        // Row 0 title, row 1 notes, row 2 header, row 3 blank, rows 4-5 data --
+        // the same shape as the xlsx gap fixture, but for CSV.
+        let path = write_csv_fixture(
+            "csv_header_gap.csv",
+            "Report Title\nGenerated 2026-01-01\nsku,qty\n,\nSKU001,10\nSKU002,20\n",
+        );
+
+        // baseline: header_row alone (no data_row_index) captures the blank gap row --
+        // CSV has no native null, so an empty field comes through as "" rather than null
+        let opts = OptionSet::new(&path).header_row(2);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 3, "gap row, SKU001, SKU002");
+        assert_eq!(rows[0].get("sku"), Some(&json!("")));
+
+        // data_row_index skips the gap row entirely
+        let opts = OptionSet::new(&path).header_row(2).data_row_index(4);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "just SKU001 and SKU002");
+        assert_eq!(rows[0].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(rows[1].get("sku"), Some(&json!("SKU002")));
+    }
+
+    #[test]
+    fn test_csv_omit_header_uses_fallback_keys_not_empty_rows() {
+        // Regression: --omit-header on a CSV used to leave `headers` completely empty
+        // (no A1/C01 fallback was ever built), so every row came out as `{}` -- and
+        // separately, the `csv` crate's has_headers(true) default silently ate row 0
+        // regardless of omit_header, discarding real data.
+        let path = write_csv_fixture("csv_omit_header.csv", "SKU001,10\nSKU002,20\n");
+        let opts = OptionSet::new(&path).omit_header();
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "both rows present, including the former row 0");
+        assert_eq!(rows[0].get("a"), Some(&json!("SKU001")));
+        assert_eq!(rows[0].get("b"), Some(&json!(10)));
+        assert_eq!(rows[1].get("a"), Some(&json!("SKU002")));
+    }
+
+    #[test]
+    fn test_csv_header_row_equals_data_row_index_for_predefined_headers() {
+        // header_row == data_row_index: a CSV with predefined/external headers (here,
+        // via --keys) where no line is actually consumed as a header -- e.g. after
+        // skipping 2 notes rows, row 2 is immediately real data, not a header line.
+        let path = write_csv_fixture(
+            "csv_predefined_headers.csv",
+            "Report Title\nGenerated 2026-01-01\nSKU001,10\nSKU002,20\n",
+        );
+        let mut opts = OptionSet::new(&path).header_row(2).data_row_index(2).omit_header();
+        opts.rows.columns = vec![
+            Column::new(Some("sku")),
+            Column::new(Some("qty")),
+        ];
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2, "both data rows present, notes rows skipped");
+        assert_eq!(rows[0].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(rows[0].get("qty"), Some(&json!(10)));
+        assert_eq!(rows[1].get("sku"), Some(&json!("SKU002")));
     }
 
     #[test]
