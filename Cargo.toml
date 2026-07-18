@@ -2,10 +2,14 @@
 name = "spreadsheet-to-json"
 description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as well as CSV and TSV files to JSON or JSONL"
 repository = "https://github.com/neilg63/spreadsheet_to_json"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
 categories = ["data-structures", "parsing", "text-processing"]
 license = "MIT"
+# Test fixtures are only needed for `cargo test` from a git checkout, not for using the
+# library -- keep them out of the published package (the largest, large-datasheet.csv,
+# is ~19MB on its own).
+exclude = ["data/*"]
 
 [dependencies]
 alphanumeric = { version = "0.2.0", features = ["cell_analysis"] }
