@@ -68,26 +68,41 @@ pub struct ResultSet {
     pub data: SpreadData,
     pub out_ref: Option<String>,
     pub opts: OptionSet,
+    /// 0-based index of the header row actually used, resolved at read time -- whether
+    /// from an explicit `OptionSet.header_row` override or auto-detection. `None` when no
+    /// row was captured as a header at all (`--omit-header`, or when auto-detection found
+    /// no confident header in the sample) -- distinct from `opts.header_row`, which only
+    /// ever reflects an explicit override and stays `None` whenever detection ran instead.
+    pub header_row_index: Option<usize>,
+    /// 0-based index of the first data row actually used, resolved at read time -- whether
+    /// from an explicit `OptionSet.data_row_index` override or auto-detection. Always
+    /// concrete: a file always starts reading data *somewhere*, unlike the header row.
+    pub body_start_index: usize,
 }
 
 impl ResultSet {
 
-  /// Instantiate with Core workbook info, header keys, data set and optional output reference
-  pub fn new(info: &WorkbookInfo, keys: &[String], data_set: DataSet, opts: &OptionSet, out_ref: Option<&str>) -> Self {
+  /// Instantiate with Core workbook info, header keys, data set and optional output reference.
+  /// `header_row_index`/`body_start_index` are the *resolved* 0-based row indices actually
+  /// used for this read -- see the field docs on `ResultSet` for why these differ from
+  /// `opts.header_row`/`opts.data_row_index`.
+  pub fn new(info: &WorkbookInfo, keys: &[String], data_set: DataSet, opts: &OptionSet, out_ref: Option<&str>, header_row_index: Option<usize>, body_start_index: usize) -> Self {
     let (num_rows, data) = match data_set {
       DataSet::WithRows(size, rows) => (size, rows),
       DataSet::Count(size) => (size, vec![])
     };
     ResultSet {
       extension: info.ext(),
-      filename: info.name(), 
+      filename: info.name(),
       selected: info.selected.clone(),
       sheets: info.sheets(),
       keys: keys.to_vec(),
       num_rows,
       data: SpreadData::from_single(data),
       out_ref: out_ref.map(|s| s.to_string()),
-      opts: opts.to_owned()
+      opts: opts.to_owned(),
+      header_row_index,
+      body_start_index,
     }
   }
 
@@ -107,14 +122,19 @@ impl ResultSet {
     }
     ResultSet {
       extension,
-      filename, 
+      filename,
       selected,
       sheets: sheet_names,
       keys,
       num_rows,
       data: SpreadData::Multiple(sheets.to_vec()),
       out_ref: None,
-      opts: opts.to_owned()
+      opts: opts.to_owned(),
+      // A single top-level header/body-start index doesn't represent multiple sheets,
+      // each of which may resolve to a different row -- unlike ResultSet::new (used for
+      // single-sheet reads), per-sheet resolved indices aren't tracked here yet.
+      header_row_index: None,
+      body_start_index: 0,
     }
   }
 

@@ -351,7 +351,7 @@ pub async fn read_single_worksheet(
     }
 
     let ds = DataSet::from_count_and_rows(total, rows, opts);
-    Ok(ResultSet::new(info, &headers, ds, opts, out_ref))
+    Ok(ResultSet::new(info, &headers, ds, opts, out_ref, detected.header_index, first_data_row_index))
 }
 
 /// Process a CSV/TSV file asynchronously with an optional row save method
@@ -471,7 +471,7 @@ pub async fn read_csv_core<'a>(
         }
         let info = WorkbookInfo::simple(path_data);
         let ds = DataSet::from_count_and_rows(total, rows, opts);
-        Ok(ResultSet::new(&info, &headers, ds, opts, out_ref))
+        Ok(ResultSet::new(&info, &headers, ds, opts, out_ref, detected.header_index, first_data_row_index))
     } else {
         let error_msg = match path_data.ext() {
             Extension::Tsv => "unreadable_tsv_file",
@@ -998,6 +998,32 @@ mod tests {
         assert_eq!(rows[0].get("qty"), Some(&json!(10.0)));
         assert_eq!(rows[1].get("sku"), Some(&json!("SKU002")));
         assert_eq!(rows[1].get("qty"), Some(&json!(20.0)));
+    }
+
+    #[test]
+    fn test_result_set_reports_the_resolved_header_and_body_start_indices() {
+        // Regression: ResultSet.header_row_index/body_start_index used to not exist at
+        // all -- callers had no way to learn what row indices a read actually used,
+        // whether from an explicit override (this test) or auto-detection (the next
+        // one), since OptionSet.header_row/.data_row_index only ever reflect an
+        // explicit override and stay None otherwise.
+        let path = gen_header_gap_fixture("header_gap_reports_resolved_indices.xlsx");
+        let opts = OptionSet::new(&path).header_row(2).data_row_index(4);
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        assert_eq!(result.header_row_index, Some(2));
+        assert_eq!(result.body_start_index, 4);
+    }
+
+    #[test]
+    fn test_result_set_reports_resolved_indices_from_auto_detection_too() {
+        // Same as above, but with no explicit header_row/data_row_index at all -- the
+        // resolved indices must reflect what auto-detection actually found, not just
+        // echo back the (unset) explicit-override fields.
+        let path = gen_header_gap_fixture("header_gap_reports_detected_indices.xlsx");
+        let opts = OptionSet::new(&path).detect_header();
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        assert_eq!(result.header_row_index, Some(2));
+        assert_eq!(result.body_start_index, 4);
     }
 
     #[test]
