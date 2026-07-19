@@ -2,7 +2,7 @@
 name = "spreadsheet-to-json"
 description = "Asynchronous conversion of Excel and OpenDocument spreadsheets as well as CSV and TSV files to JSON or JSONL"
 repository = "https://github.com/neilg63/spreadsheet_to_json"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 categories = ["data-structures", "parsing", "text-processing"]
 license = "MIT"
@@ -18,9 +18,9 @@ simple-string-patterns = "0.4.0"
 to_segments = "^0.1.2"
 calamine = { version = "0.36.0", features = ["chrono", "dates"] }
 chrono = "^0.4.45"
-csv = "1.4.0"
-fuzzy-datetime = "0.1.3"
-heck = "0.5.0"
+csv = "1.4"
+fuzzy-datetime = "0.1.4"
+heck = "0.5"
 indexmap = { version = "^2.14.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive", "serde_derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -28,3 +28,4 @@ tokio = { version = ">=1.52.0, <2.0.0", features = ["full"] }
 
 [dev-dependencies]
 rust_xlsxwriter = "0.89"
+

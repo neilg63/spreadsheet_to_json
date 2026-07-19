@@ -258,9 +258,9 @@ dependencies = [
 
 [[package]]
 name = "fuzzy-datetime"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4dad9cbfcdf3d0ebb56c6f03d0e5f17c173b4295d1444a6a5e14bb2ee1a114f"
+checksum = "1907bfc8b2a43ecd99442d9087dd840d84b173fd5a1f1c651684b51547a63f0f"
 dependencies = [
  "chrono",
  "simple-string-patterns",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "spreadsheet-to-json"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "alphanumeric",
  "calamine",

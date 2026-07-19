@@ -12,6 +12,7 @@ use crate::data_set::*;
 use crate::detect::{resolve_header_and_data_rows, DETECT_SAMPLE_SIZE};
 use crate::error::GenericError;
 use alphanumeric::*;
+use simple_string_patterns::SimpleMatch;
 use crate::headers::*;
 use crate::helpers::float_value;
 use crate::helpers::string_value;
@@ -23,7 +24,7 @@ use crate::Format;
 use crate::OptionSet;
 use crate::PathData;
 use crate::RowOptionSet;
-use fuzzy_datetime::{iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
+use fuzzy_datetime::{fuzzy_to_date_string, fuzzy_to_datetime_string_opts, iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
 
 /// Callback invoked once per row when saving asynchronously (e.g. --deferred mode)
 pub type SaveRowFn = Box<dyn Fn(IndexMap<String, Value>) -> Result<(), GenericError> + Send + Sync>;
@@ -509,7 +510,7 @@ fn workbook_cell_to_value(cell: &Data, opts: &RowOptionSet, c_index: usize) -> V
 
     match cell {
         Data::Int(i) => Value::Number(Number::from_i128(*i as i128).unwrap()),
-        Data::Float(f) => process_float_value(*f, format),
+        Data::Float(f) => process_float_value(*f, format, def_val),
         Data::DateTimeIso(d) => process_iso_datetime_value(d, def_val, mode),
         Data::DateTime(d) => process_excel_datetime_value(d, def_val, mode),
         Data::Bool(b) => Value::Bool(*b),
@@ -538,11 +539,14 @@ fn resolve_datetime_mode(format: &Format, col_mode: DateTimeMode, row_mode: Date
     }
 }
 
-fn process_float_value(value: f64, format: Format) -> Value {
+fn process_float_value(value: f64, format: Format, def_val: Option<Value>) -> Value {
     match format {
         Format::Integer => Value::Number(Number::from_i128(value as i128).unwrap()),
         Format::Boolean => Value::Bool(value >= 1.0),
         Format::Text => Value::String(value.to_string()),
+        Format::Decimal(places) => float_value(value.round_decimal(places)),
+        Format::Time | Format::Hm => decimal_to_hm_string(value)
+            .map_or_else(|| def_val.unwrap_or(Value::Null), Value::String),
         _ => Value::Number(Number::from_f64(value).unwrap()),
     }
 }
@@ -628,6 +632,143 @@ fn simplify_datetime_string(full_datetime_str: &str) -> String {
     }
 }
 
+/// Parses a plain-text date string with fuzzy-datetime's own order/separator guessing
+/// enabled (`date_opts: None`), rather than `iso_fuzzy_to_date_string`'s forced YMD + '-'
+/// assumption. Text cells and CSV values commonly use DMY or MDY order with '/' as the
+/// separator -- e.g. "19/07/2026" -- which the forced function rejects outright (it never
+/// even reaches order-guessing, since an explicit splitter was already given). The output
+/// shape is always the same canonical "YYYY-MM-DD" regardless of the input's order or
+/// separator -- only what's *accepted* as input is more flexible, not what's produced.
+fn guess_date_string(value: &str) -> Option<String> {
+    fuzzy_to_date_string(value, None)
+}
+
+/// Datetime equivalent of `guess_date_string` -- see its doc comment. Always produces the
+/// canonical "YYYY-MM-DDTHH:MM:SS.mmmZ" shape `iso_fuzzy_to_datetime_string` also
+/// produces, just with flexible input-side order/separator guessing instead of a forced
+/// YMD + '-' assumption.
+fn guess_datetime_string(value: &str) -> Option<String> {
+    fuzzy_to_datetime_string_opts(value, 'T', None, Some(':'), true)
+}
+
+/// Recognizes a string that's already plausibly just a bare time -- colon-separated
+/// ("11:39") or dot-separated ("12.30", the common case where a user typed a time with
+/// '.' instead of ':' and the cell was explicitly text-formatted, so Excel/Sheets never
+/// got the chance to convert it to a float; a string never loses the trailing-zero
+/// information a float would, so unlike decimal_to_hm_string below, no numeric
+/// reconstruction is needed here, just a separator swap). Only ever consulted as a
+/// fallback once iso_fuzzy_to_datetime_string has already failed to parse the string as
+/// a full datetime (see the callers below), so a genuine full datetime string -- which
+/// always succeeds there first -- never reaches this at all; there's no risk of
+/// misclassifying one.
+///
+/// '.' is swapped for ':' first (a no-op if there wasn't one), then the individual
+/// components are extracted directly as integers via `to_numbers::<u8>()` -- no regex,
+/// no manual splitting -- and accepted as a plausible 2- or 3-part hh:mm(:ss) shape,
+/// reformatted with zero-padding. Minutes/seconds are bounded to < 60 (always true
+/// regardless of what the hours represent), but hours are *not* capped at < 24: a "time"
+/// column is just as often a duration (elapsed hours, a race/video/timesheet total) as a
+/// time-of-day, and durations routinely exceed 23 hours (e.g. "27:45:00") -- there's no
+/// way to tell which one a given column means from the value alone, so this doesn't
+/// guess and reject perfectly valid durations. An explicit Format::Time/Format::Hm
+/// override is still "I know this is a time" -- a well-formed hh:mm(:ss) shape is
+/// trusted -- but a clearly-implausible one ("11:60") or anything that isn't 2-3 numeric
+/// parts is rejected rather than passed through as a bogus result.
+///
+/// A trailing AM/PM marker is the one exception: it's detected up front via
+/// `ends_with_ci`, and once detected the hour is reinterpreted as 12-hour-clock (1-12)
+/// rather than rejected outright -- "12:45am" is 00:45, "2:30pm" is 14:30, "12:00pm" (noon)
+/// stays 12. An hour outside 1-12 alongside an am/pm marker ("14:00pm") isn't genuine
+/// 12-hour notation at all -- the 12-hour clock never produces those values -- so rather
+/// than treating it as contradictory and rejecting it, the hour is trusted as already
+/// being literal 24-hour and the (redundant) suffix is simply dropped: "14:00pm" is
+/// "14:00". This is consistent, if non-standard, data entry (some spreadsheet sources
+/// append am/pm out of habit regardless of hour), not the malformed/mistaken-type case
+/// this function otherwise sanitizes against.
+///
+/// Any OTHER letters -- a duration-unit suffix ("2h45m"), stray text -- still reject
+/// outright before ever calling to_numbers(). `to_numbers()` silently discards non-digit
+/// characters, so without this guard "2h45m" would extract as [2, 45] and format as
+/// "02:45" -- not a rejection, a *wrong* answer indistinguishable from a correct one.
+fn parse_bare_time_string(value: &str) -> Option<String> {
+    let has_am_suffix = value.ends_with_ci("am");
+    let has_pm_suffix = !has_am_suffix && value.ends_with_ci("pm");
+    let is_12_hour = has_am_suffix || has_pm_suffix;
+
+    if !is_12_hour && value.has_alphabetic() {
+        return None;
+    }
+
+    // Strip the am/pm suffix itself before extraction -- to_numbers() happens to treat
+    // any letter as a boundary and skip it anyway, but stripping explicitly here doesn't
+    // depend on that being true of every input shape or future version of to_numbers().
+    let numeric_part = if is_12_hour {
+        value[..value.len() - 2].trim_end()
+    } else {
+        value
+    };
+
+    let numbers: Vec<u8> = numeric_part.replace('.', ":").to_numbers();
+
+    let resolve_hour = |hrs: u8| -> u8 {
+        if !is_12_hour || !(1..=12).contains(&hrs) {
+            // Not ambiguous 12-hour notation -- either no am/pm marker at all, or an
+            // hour a real 12-hour clock could never produce -- so the hour is used as
+            // literally given and any am/pm marker present is redundant, not corrective.
+            return hrs;
+        }
+        match (has_am_suffix, hrs) {
+            (true, 12) => 0,        // 12am -> midnight
+            (true, _) => hrs,       // 1am-11am unchanged
+            (false, 12) => 12,      // 12pm -> noon, unchanged
+            (false, _) => hrs + 12, // 1pm-11pm -> +12
+        }
+    };
+
+    match numbers.as_slice() {
+        [hrs, mins] if *mins < 60 => Some(format!("{:02}:{:02}", resolve_hour(*hrs), mins)),
+        [hrs, mins, secs] if *mins < 60 && *secs < 60 => {
+            Some(format!("{:02}:{:02}:{:02}", resolve_hour(*hrs), mins, secs))
+        }
+        _ => None,
+    }
+}
+
+/// Reconstructs a sexagesimal "HH:MM" time from a plain decimal number, for the common
+/// real-world case where a spreadsheet app silently turned a user's dot-typed time entry
+/// (e.g. typing "12.30", meaning 12:30) into a bare float with the trailing zero
+/// stripped ("12.3") -- Excel/Sheets have no dedicated time type for a dot-typed value,
+/// so it's read as a plain decimal number instead. Used by process_float_value for
+/// Format::Time/Format::Hm on a genuine (native, non-string) numeric cell, which is
+/// presumed to mean exactly this, not a generic decimal-to-time conversion (0.3 of an
+/// hour is not 30 minutes -- the digits after the point are read literally as MM, never
+/// scaled by 60). The string-cell equivalent is simpler and doesn't need this: see
+/// parse_bare_time_string's doc comment for why.
+///
+/// The fractional part is formatted to a fixed 2 decimal places first, since ".3" and
+/// ".30" are otherwise indistinguishable by the time this runs -- the trailing zero, if
+/// there ever was one, is already gone -- then those two digits are read directly as MM.
+/// Only succeeds when that reads as a plausible minute value (< 60); the whole part
+/// (hours) is *not* capped at < 24, matching parse_bare_time_string's own reasoning --
+/// a "time" column is just as often a duration (elapsed hours) as a time-of-day, and
+/// durations routinely exceed 23 hours. Negative values are rejected (not a time or a
+/// duration either way), and the hour is read as a `u8`, so it naturally caps at 255
+/// rather than growing unbounded. A genuine decimal quantity like a price or percentage
+/// (e.g. 12.75) is still correctly left alone by the minutes check. HH:MM only,
+/// deliberately -- there's no way to recover seconds from a single decimal fraction.
+fn decimal_to_hm_string(value: f64) -> Option<String> {
+    if value < 0.0 {
+        return None;
+    }
+    let hours = value.trunc() as u8;
+    let frac_digits = format!("{:.2}", value.fract().abs());
+    let minutes: u32 = frac_digits.split('.').nth(1)?.parse().ok()?;
+    if minutes >= 60 {
+        return None;
+    }
+    Some(format!("{:02}:{:02}", hours, minutes))
+}
+
 fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> Value {
     match format {
         Format::Boolean => process_truthy_value(value, def_val, |v, ef| v.is_truthy_core(ef)),
@@ -639,16 +780,20 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
             process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places)))
         }
         Format::Float => process_numeric_value(value, def_val, float_value),
-        Format::Date => process_date_value(value, def_val, iso_fuzzy_to_date_string),
-        Format::DateTime => process_date_value(value, def_val, iso_fuzzy_to_datetime_string),
+        Format::Date => process_date_value(value, def_val, guess_date_string),
+        Format::DateTime => process_date_value(value, def_val, guess_datetime_string),
         Format::DateTimeSimple => process_date_value(value, def_val, |s| {
-            iso_fuzzy_to_datetime_string(s).map(|full| simplify_datetime_string(&full))
+            guess_datetime_string(s).map(|full| simplify_datetime_string(&full))
         }),
         Format::Time => process_date_value(value, def_val, |s| {
-            iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, false))
+            guess_datetime_string(s)
+                .and_then(|full| extract_time_portion(&full, false))
+                .or_else(|| parse_bare_time_string(s))
         }),
         Format::Hm => process_date_value(value, def_val, |s| {
-            iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, true))
+            guess_datetime_string(s)
+                .and_then(|full| extract_time_portion(&full, true))
+                .or_else(|| parse_bare_time_string(s))
         }),
         _ => Value::String(value.to_owned()),
     }
@@ -719,21 +864,25 @@ fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Valu
     // Value::Number instead of going through fuzzy-datetime at all.
     let def_val = col.and_then(|c| c.default.clone());
     match fmt {
-        Format::Date => return process_date_value(cell, def_val, iso_fuzzy_to_date_string),
-        Format::DateTime => return process_date_value(cell, def_val, iso_fuzzy_to_datetime_string),
+        Format::Date => return process_date_value(cell, def_val, guess_date_string),
+        Format::DateTime => return process_date_value(cell, def_val, guess_datetime_string),
         Format::DateTimeSimple => {
             return process_date_value(cell, def_val, |s| {
-                iso_fuzzy_to_datetime_string(s).map(|full| simplify_datetime_string(&full))
+                guess_datetime_string(s).map(|full| simplify_datetime_string(&full))
             })
         }
         Format::Time => {
             return process_date_value(cell, def_val, |s| {
-                iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, false))
+                guess_datetime_string(s)
+                    .and_then(|full| extract_time_portion(&full, false))
+                    .or_else(|| parse_bare_time_string(s))
             })
         }
         Format::Hm => {
             return process_date_value(cell, def_val, |s| {
-                iso_fuzzy_to_datetime_string(s).and_then(|full| extract_time_portion(&full, true))
+                guess_datetime_string(s)
+                    .and_then(|full| extract_time_portion(&full, true))
+                    .or_else(|| parse_bare_time_string(s))
             })
         }
         _ => {}
@@ -767,6 +916,11 @@ fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Valu
                 Format::Boolean => {
                     // only 1.0 or more will evaluate as true
                     new_cell = Value::Bool(float_val.as_f64().unwrap_or(0f64) >= 1.0);
+                }
+                Format::Decimal(places) => {
+                    if let Some(f) = float_val.as_f64() {
+                        new_cell = float_value(f.round_decimal(places));
+                    }
                 }
                 _ => {
                     new_cell = Value::Number(float_val);
@@ -1222,6 +1376,220 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_bare_time_string_extracts_and_validates_via_to_numbers() {
+        // to_numbers::<u8>() extracts the numeric components directly (no regex, no
+        // manual splitting), so real minutes/seconds range validation -- and zero-padded
+        // reformatting -- comes essentially for free; a superset check ("starts/ends
+        // with a digit") would have let a clearly-implausible value like "11:60" through
+        // as a bogus "valid" time.
+        assert_eq!(parse_bare_time_string("11:39"), Some("11:39".to_string()));
+        // reformatted with zero-padding, not passed through as typed
+        assert_eq!(parse_bare_time_string("9:5:3"), Some("09:05:03".to_string()));
+        assert_eq!(parse_bare_time_string(" 23:59:59 "), Some("23:59:59".to_string()));
+        // '.' works exactly the same as ':' -- the dot-typed-time case
+        assert_eq!(parse_bare_time_string("12.30"), Some("12:30".to_string()));
+        // hours are deliberately NOT capped at < 24 -- a "time" column is just as often
+        // a duration (elapsed hours: a race, a video, a timesheet total) as a
+        // time-of-day, and durations routinely exceed 23 hours
+        assert_eq!(parse_bare_time_string("27:45:00"), Some("27:45:00".to_string()));
+        assert_eq!(parse_bare_time_string("100:00"), Some("100:00".to_string()));
+        // minutes/seconds are always bounded to < 60 regardless -- out of range here is
+        // correctly rejected, not passed through as a bogus result
+        assert_eq!(parse_bare_time_string("11:60"), None);
+        // clearly not a time at all -- no digits, or not exactly 2-3 numeric parts
+        assert_eq!(parse_bare_time_string("not a time"), None);
+        assert_eq!(parse_bare_time_string("12"), None);
+        // a genuine decimal number that also happens to read as a plausible hh:mm is an
+        // inherent, accepted ambiguity of the dot-as-colon convention (same one behind
+        // "4.5" as 4h30m in decimal-hours notation vs. 4:50) -- Format::Time/Format::Hm
+        // is an explicit "I know this is a time" assertion, so this isn't second-guessed
+        assert_eq!(parse_bare_time_string("3.14"), Some("03:14".to_string()));
+    }
+
+    #[test]
+    fn test_parse_bare_time_string_converts_a_trailing_am_pm_marker_to_24_hour() {
+        // A trailing am/pm marker is detected and converted to 24-hour notation, whether
+        // or not it's separated from the digits by a space, and regardless of case.
+        assert_eq!(parse_bare_time_string("2:30 PM"), Some("14:30".to_string()));
+        assert_eq!(parse_bare_time_string("2:30PM"), Some("14:30".to_string()));
+        assert_eq!(parse_bare_time_string("2:30pm"), Some("14:30".to_string()));
+        // 12-hour-clock oddities: 12am is midnight, 12pm (noon) is unchanged
+        assert_eq!(parse_bare_time_string("12:45am"), Some("00:45".to_string()));
+        assert_eq!(parse_bare_time_string("12:00 PM"), Some("12:00".to_string()));
+        assert_eq!(parse_bare_time_string("11:39 AM"), Some("11:39".to_string()));
+        // also applies to the 3-part hh:mm:ss shape
+        assert_eq!(parse_bare_time_string("11:39:05 PM"), Some("23:39:05".to_string()));
+        // an hour outside 1-12 alongside an am/pm marker isn't genuine 12-hour notation
+        // at all -- the 12-hour clock never produces those hours -- so it's trusted as
+        // already-literal 24-hour and the redundant suffix is dropped, not rejected
+        assert_eq!(parse_bare_time_string("14:00pm"), Some("14:00".to_string()));
+        assert_eq!(parse_bare_time_string("14:30pm"), Some("14:30".to_string()));
+        assert_eq!(parse_bare_time_string("0:30am"), Some("00:30".to_string()));
+    }
+
+    #[test]
+    fn test_parse_bare_time_string_rejects_anything_else_with_letters_rather_than_guess() {
+        // Regression: to_numbers::<u8>() silently discards non-digit characters, so
+        // without an explicit guard "2h45m" would extract as [2, 45] and format as
+        // "02:45" -- not a rejection, a *wrong* answer indistinguishable from a correct
+        // one. Duration-unit notation is a different, out-of-scope notation -- rejected,
+        // not silently (and wrongly) reinterpreted as hh:mm.
+        assert_eq!(parse_bare_time_string("2h45m"), None);
+        assert_eq!(parse_bare_time_string("not a time"), None);
+    }
+
+    #[test]
+    fn test_format_time_falls_back_to_a_bare_time_string_with_no_date_component() {
+        // Regression: a cell already containing just a time, e.g. "11:39" (no date at
+        // all, common for a spreadsheet column pre-formatted as text), returned null
+        // under Format::Time/Format::Hm -- iso_fuzzy_to_datetime_string requires a date
+        // component to parse anything at all, so it always failed on a bare time, and
+        // the whole thing fell through to the column's default (null, absent one).
+        // Format::Time/Hm should treat an already-bare time string as already correct,
+        // not demand a date it was never asked to interpret -- passed through as-is,
+        // matching parse_bare_time_string's own loose, non-reformatting behavior.
+        let time_cols = vec![Column::new_format(Format::Time, None)];
+        let time_opts = RowOptionSet::simple(&time_cols);
+        assert_eq!(csv_cell_to_json_value("11:39", &time_opts, 0), Value::String("11:39".to_string()));
+
+        let hm_cols = vec![Column::new_format(Format::Hm, None)];
+        let hm_opts = RowOptionSet::simple(&hm_cols);
+        assert_eq!(csv_cell_to_json_value("11:39", &hm_opts, 0), Value::String("11:39".to_string()));
+
+        // a genuine full datetime string still goes through the original extraction path,
+        // not the bare-time fallback -- unaffected by this change
+        assert_eq!(
+            csv_cell_to_json_value("2023-06-15T09:15:30", &time_opts, 0),
+            Value::String("09:15:30".to_string())
+        );
+
+        // the xlsx/ods string-cell path (process_string_value) shares the same fix
+        assert_eq!(process_string_value("11:39", Format::Time, None), Value::String("11:39".to_string()));
+        assert_eq!(process_string_value("11:39", Format::Hm, None), Value::String("11:39".to_string()));
+    }
+
+    #[test]
+    fn test_decimal_to_hm_string_reads_the_fraction_as_literal_minutes_not_a_scaled_fraction() {
+        // "12.30" typed by a user (meaning 12:30) commonly arrives here as the bare float
+        // 12.3 -- Excel/Sheets have no time type for a dot-typed value, so it's silently
+        // read as a decimal number, trailing zero dropped. The fractional digits must be
+        // read literally as MM (0.3 -> "30", i.e. the trailing zero restored), never
+        // scaled by 60 (0.3 of an hour would be 18 minutes, not 30).
+        assert_eq!(decimal_to_hm_string(12.3), Some("12:30".to_string()));
+        assert_eq!(decimal_to_hm_string(9.05), Some("09:05".to_string()));
+        assert_eq!(decimal_to_hm_string(0.0), Some("00:00".to_string()));
+        assert_eq!(decimal_to_hm_string(23.59), Some("23:59".to_string()));
+        // hours are NOT capped at < 24 -- a "time" column is just as often a duration
+        // (elapsed hours) as a time-of-day, and durations routinely exceed 23 hours;
+        // there's no way to tell which from the value alone, so this doesn't guess
+        assert_eq!(decimal_to_hm_string(24.0), Some("24:00".to_string()));
+        assert_eq!(decimal_to_hm_string(100.3), Some("100:30".to_string()));
+        // a genuine decimal quantity (price, percentage, ...) must still be left alone --
+        // >= 60 "minutes" isn't a plausible time under any interpretation, and a negative
+        // value is neither a time-of-day nor a duration
+        assert_eq!(decimal_to_hm_string(12.75), None);
+        assert_eq!(decimal_to_hm_string(-1.0), None);
+    }
+
+    #[test]
+    fn test_format_time_reconstructs_hm_from_a_decimal_disguised_time() {
+        // The CSV/text-cell path: "12.30" survives as literal text only when a cell is
+        // explicitly formatted/typed as text (bypassing Excel's auto-decimal-conversion);
+        // otherwise it's already a float by the time it reaches spreadsheet_to_json at
+        // all -- covered by the native Data::Float case below.
+        //
+        // Strings don't have the float case's trailing-zero-loss problem (a string
+        // preserves exactly what was typed), so this just swaps '.' for ':' and reuses
+        // parse_bare_time_string's own to_numbers-based extraction and validation --
+        // not decimal_to_hm_string's reconstruction, which the native-float case still
+        // needs. Single-digit components are zero-padded on the way out ("12.3" ->
+        // "12:03"), same as parse_bare_time_string does for a literally-typed "12:3".
+        let time_cols = vec![Column::new_format(Format::Time, None)];
+        let time_opts = RowOptionSet::simple(&time_cols);
+        assert_eq!(csv_cell_to_json_value("12.30", &time_opts, 0), Value::String("12:30".to_string()));
+        assert_eq!(csv_cell_to_json_value("12.3", &time_opts, 0), Value::String("12:03".to_string()));
+
+        let hm_cols = vec![Column::new_format(Format::Hm, None)];
+        let hm_opts = RowOptionSet::simple(&hm_cols);
+        assert_eq!(csv_cell_to_json_value("12.30", &hm_opts, 0), Value::String("12:30".to_string()));
+
+        // the xlsx/ods text-cell path shares the same fallback
+        assert_eq!(process_string_value("12.30", Format::Time, None), Value::String("12:30".to_string()));
+
+        // range validation now applies to the string path too (parse_bare_time_string's
+        // own to_numbers-based check), so a genuinely implausible "time" is correctly
+        // rejected rather than passed through as a bogus result
+        assert_eq!(csv_cell_to_json_value("12.75", &time_opts, 0), Value::Null);
+
+        // the native Data::Float case -- the far more common real-world path, since
+        // Excel/Sheets normally convert a dot-typed time entry to a float outright
+        // rather than leaving it as text. Unlike the string case, the trailing zero is
+        // already gone by the time this runs (12.30 and 12.3 are the same f64), so this
+        // one *does* need decimal_to_hm_string's separate numeric reconstruction.
+        assert_eq!(process_float_value(12.3, Format::Time, None), Value::String("12:30".to_string()));
+        assert_eq!(process_float_value(12.3, Format::Hm, None), Value::String("12:30".to_string()));
+
+        // a genuine price/decimal column with Format::Time forced on it (user error, or
+        // just not a time column) correctly yields null rather than a bogus time
+        assert_eq!(process_float_value(12.75, Format::Time, None), Value::Null);
+    }
+
+    #[test]
+    fn test_format_date_recognizes_slash_separated_dates_of_any_order() {
+        // Regression: Format::Date/DateTime/... on a text cell or CSV value used
+        // iso_fuzzy_to_date_string/iso_fuzzy_to_datetime_string, which force
+        // DateOrder::YMD *and* '-' as the only accepted separator (DateOptions::default())
+        // -- passing an explicit DateOptions skips fuzzy-datetime's own order/separator
+        // guessing entirely. Any '/'-separated date -- by far the most common separator
+        // worldwide, in any of DMY/MDY/YMD order -- returned null outright, even the
+        // unambiguous "2026/07/19" (right order, just the "wrong" separator). Now uses
+        // fuzzy-datetime's guessing entry points instead, output shape unchanged.
+        let cols = vec![Column::new_format(Format::Date, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        for (value, expected) in [
+            ("19/07/2026", "2026-07-19"), // DMY (day 19 rules out MDY)
+            ("07/19/2026", "2026-07-19"), // MDY (day 19 rules out DMY)
+            ("2026/07/19", "2026-07-19"), // YMD, just not '-'
+            ("2026-07-19", "2026-07-19"), // the already-working case, unaffected
+        ] {
+            assert_eq!(
+                csv_cell_to_json_value(value, &row_opts, 0),
+                Value::String(expected.to_string()),
+                "{:?} should resolve to {:?}",
+                value,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_datetime_recognizes_slash_separated_dates_too() {
+        let cols = vec![Column::new_format(Format::DateTime, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(
+            csv_cell_to_json_value("19/07/2026", &row_opts, 0),
+            Value::String("2026-07-19T00:00:00.000Z".to_string())
+        );
+        // the xlsx/ods string-cell path shares the same fix
+        assert_eq!(
+            process_string_value("19/07/2026", Format::Date, None),
+            Value::String("2026-07-19".to_string())
+        );
+    }
+
+    #[test]
+    fn test_format_date_recognizes_dot_separated_dates_too() {
+        // Depends on the fuzzy-datetime 0.1.4 fix for segment_is_subseconds
+        // misreading a bare 4-digit year as milliseconds-plus-timezone-suffix.
+        let cols = vec![Column::new_format(Format::Date, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(
+            csv_cell_to_json_value("19.07.2026", &row_opts, 0),
+            Value::String("2026-07-19".to_string())
+        );
+    }
+
+    #[test]
     fn test_simplify_datetime_string_drops_milliseconds_and_trailing_z() {
         assert_eq!(simplify_datetime_string("2026-07-18T18:07:34.000Z"), "2026-07-18T18:07:34");
         // also tolerates a string with no fractional seconds or Z at all
@@ -1296,6 +1664,17 @@ mod tests {
     }
 
     #[test]
+    fn test_native_float_cell_decimal_format_rounds_to_the_given_precision() {
+        // Regression: Format::Decimal(places) had no arm at all in process_float_value --
+        // it fell through to the plain Value::Number catch-all, so e.g. --keys "price|d2"
+        // on a genuine (non-string) xlsx/ods float cell had no effect whatsoever.
+        let cols = vec![Column::new_format(Format::Decimal(2), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        let cell = Data::Float(19.98765);
+        assert_eq!(workbook_cell_to_value(&cell, &row_opts, 0), json!(19.99));
+    }
+
+    #[test]
     fn test_csv_cell_integer_format_truncates_decimal_values() {
         // Regression test: Number::as_i128() only succeeds for already-integer-valued
         // Numbers, so casting a decimal CSV cell like "58.2" to Format::Integer used to
@@ -1305,6 +1684,18 @@ mod tests {
         assert_eq!(csv_cell_to_json_value("58.2", &row_opts, 0), Value::Number(Number::from(58)));
         assert_eq!(csv_cell_to_json_value("82.5", &row_opts, 0), Value::Number(Number::from(82)));
         assert_eq!(csv_cell_to_json_value("100", &row_opts, 0), Value::Number(Number::from(100)));
+    }
+
+    #[test]
+    fn test_csv_cell_decimal_format_rounds_to_the_given_precision() {
+        // Regression: Format::Decimal(places) had no arm at all in csv_cell_to_json_value's
+        // numeric match -- it fell through to the plain Value::Number catch-all, so
+        // e.g. --keys "price|d2" on a CSV cell had no effect whatsoever.
+        let cols = vec![Column::new_format(Format::Decimal(2), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("19.98765", &row_opts, 0), json!(19.99));
+        assert_eq!(csv_cell_to_json_value("5.4", &row_opts, 0), json!(5.4));
+        assert_eq!(csv_cell_to_json_value("100", &row_opts, 0), json!(100.0));
     }
 
     #[test]
