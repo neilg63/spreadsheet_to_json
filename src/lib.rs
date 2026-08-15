@@ -7,11 +7,13 @@ pub use is_truthy;
 pub mod helpers;
 pub mod round_decimal;
 pub mod error;
+pub mod key_segment;
 
 // make tokio available to implementers if not imported directly
 pub use options::*;
 pub use reader::*;
 pub use data_set::*;
+pub use key_segment::*;
 
 // re-export these crates
 pub use tokio;

@@ -67,11 +67,12 @@ pub fn build_header_keys(
         let mut has_override = false;
         if let Some(col) = columns.get(h_index) {
             // only apply override if key is not empty
-            if let Some(k_str) = &col.key {
-                let h_key = if headers.contains(&k_str.to_string()) {
-                    to_padded_col_suffix(k_str, h_index, num_cols)
+            if let Some(segment) = &col.key {
+                let k_str = segment.to_string();
+                let h_key = if headers.contains(&k_str) {
+                    to_padded_col_suffix(&k_str, h_index, num_cols)
                 } else {
-                    k_str.to_string()
+                    k_str
                 };
                 headers.push(h_key);
                 has_override = true;
@@ -91,6 +92,56 @@ pub fn build_header_keys(
         }
     }
     headers
+}
+
+/// Combines `header_row_span` consecutive raw header rows into the single effective
+/// header row `build_header_keys`/`natural_column_keys` expect, for spreadsheets whose
+/// header spans more than one row (e.g. a merged "2015"/"2025" year row with a "Female"/
+/// "Male" sub-label row underneath).
+///
+/// Each row is forward-filled *independently* first: a blank cell inherits the nearest
+/// non-blank value to its left within that same row, which is what makes a merged cell
+/// work without needing any merge-range metadata from calamine at all -- calamine (like
+/// the underlying xlsx/CSV data) only ever reports a merged cell's value in its top-left
+/// position, leaving the rest of the merge blank, and that's indistinguishable from an
+/// ordinary blank cell that just happens to be empty. Forward-fill produces the correct
+/// result either way: a genuine merge "spreads" its one value across the columns it
+/// visually spans, and an incidentally-blank cell (nothing to its left either) stays
+/// blank rather than inheriting something from a different, unrelated column.
+///
+/// Then, down each column, every row's (now filled) value is joined with `_` -- blank
+/// values (a leading blank with nothing to its left to inherit) are skipped entirely
+/// rather than leaving a stray separator, so a column where only one row actually
+/// contributes text still gets a clean single-segment key.
+pub fn combine_header_rows(rows: &[Vec<String>]) -> Vec<String> {
+    let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let filled: Vec<Vec<String>> = rows.iter().map(|row| forward_fill_row(row, num_cols)).collect();
+    (0..num_cols)
+        .map(|col_index| {
+            filled
+                .iter()
+                .filter_map(|row| row.get(col_index))
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .collect::<Vec<String>>()
+                .join("_")
+        })
+        .collect()
+}
+
+fn forward_fill_row(row: &[String], num_cols: usize) -> Vec<String> {
+    let mut result = Vec::with_capacity(num_cols);
+    let mut carry: Option<&str> = None;
+    for i in 0..num_cols {
+        let cell = row.get(i).map(|s| s.trim()).unwrap_or("");
+        if !cell.is_empty() {
+            carry = Some(cell);
+            result.push(cell.to_string());
+        } else {
+            result.push(carry.unwrap_or("").to_string());
+        }
+    }
+    result
 }
 
 /// The natural (un-overridden) key for each column, exactly as build_header_keys would
@@ -177,6 +228,61 @@ mod tests {
     #[test]
     fn test_cell_letters_1() {
         assert_eq!(to_a1_col_key(26), "aa");
+    }
+
+    fn strs(vals: &[&str]) -> Vec<String> {
+        vals.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_combine_header_rows_forward_fills_a_single_merged_block() {
+        // A1:C1 merged "2015" -- calamine reports it only in A1, B1/C1 blank.
+        let rows = vec![strs(&["2015", "", ""]), strs(&["North", "Midlands", "South"])];
+        assert_eq!(
+            combine_header_rows(&rows),
+            strs(&["2015_North", "2015_Midlands", "2015_South"])
+        );
+    }
+
+    #[test]
+    fn test_combine_header_rows_handles_two_merged_blocks_in_the_same_row() {
+        let rows = vec![
+            strs(&["2015", "", "", "2025", "", ""]),
+            strs(&["North", "Midlands", "South", "North", "Midlands", "South"]),
+        ];
+        assert_eq!(
+            combine_header_rows(&rows),
+            strs(&[
+                "2015_North", "2015_Midlands", "2015_South",
+                "2025_North", "2025_Midlands", "2025_South"
+            ])
+        );
+    }
+
+    #[test]
+    fn test_combine_header_rows_leaves_a_leading_blank_with_nothing_to_inherit_empty() {
+        // country_code has no row-1 label at all (nothing merged over it) and no row-2
+        // sub-label either -- both rows contribute nothing, not a stray "_" separator.
+        let rows = vec![
+            strs(&["", "2015", ""]),
+            strs(&["", "North", "South"]),
+        ];
+        assert_eq!(combine_header_rows(&rows), strs(&["", "2015_North", "2015_South"]));
+    }
+
+    #[test]
+    fn test_combine_header_rows_skips_a_row_that_contributes_nothing_for_one_column() {
+        // country_code (column 0) only ever gets a value from row 1 -- row 2 is blank
+        // for it and shouldn't leave a trailing "_".
+        let rows = vec![strs(&["country code", "2015", ""]), strs(&["", "North", "South"])];
+        assert_eq!(combine_header_rows(&rows), strs(&["country code", "2015_North", "2015_South"]));
+    }
+
+    #[test]
+    fn test_combine_header_rows_with_a_single_row_is_a_no_op() {
+        // header_row_span == 1 (the default) -- output is identical to the input.
+        let rows = vec![strs(&["id", "name", "score"])];
+        assert_eq!(combine_header_rows(&rows), strs(&["id", "name", "score"]));
     }
 
     #[test]

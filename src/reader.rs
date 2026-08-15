@@ -20,6 +20,7 @@ use is_truthy::*;
 use crate::round_decimal::RoundDecimal;
 use crate::DateTimeMode;
 use crate::Extension;
+use to_segments::ToSegments;
 use crate::Format;
 use crate::OptionSet;
 use crate::PathData;
@@ -170,7 +171,7 @@ async fn read_multiple_worksheets(
                 headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
                 resolved_row_opts.columns = resolved_columns;
                 has_headers = !match_header_row_below;
-                col_keys = first_row;
+                col_keys = first_row.to_vec();
             }
         } else {
             let num_cols = range.get_size().1;
@@ -258,17 +259,39 @@ pub async fn read_single_worksheet(
     // cases fall back to A1/C01-style names instead of deriving them from row text.
     let capture_headers = detected.header_index.is_some();
     let header_row_index = detected.header_index.unwrap_or(0);
-    let match_header_row_below = capture_headers && header_row_index > 0;
+    let header_row_span = opts.effective_header_row_span();
+    // The old single-row-below scan only fires for span == 1 -- a span > 1 header is
+    // always fully resolved upfront below, regardless of header_row_index, so this
+    // legacy per-row detection never needs to (and mustn't) run for it.
+    let match_header_row_below = capture_headers && header_row_index > 0 && header_row_span <= 1;
     let mut resolved_row_opts = opts.rows.clone();
 
-    if capture_headers {
+    if capture_headers && header_row_span > 1 {
+        // Multi-row header: read `header_row_span` consecutive rows starting at
+        // header_row_index (works the same whether that's 0 or further down the sheet,
+        // unlike the single-row branches below which split on that) and forward-fill/
+        // join them into one effective header row via combine_header_rows.
+        let raw_header_rows: Vec<Vec<String>> = range
+            .rows()
+            .skip(header_row_index)
+            .take(header_row_span)
+            .map(|row| row.iter().map(|c| c.to_string()).collect())
+            .collect();
+        let combined = combine_header_rows(&raw_header_rows);
+        let natural_keys = natural_column_keys(&combined, &opts.field_mode);
+        let resolved_columns = resolve_columns(&columns, &natural_keys);
+        headers = build_header_keys(&combined, &resolved_columns, &opts.field_mode);
+        resolved_row_opts.columns = resolved_columns;
+        has_headers = true;
+        col_keys = combined;
+    } else if capture_headers {
         if let Some(first_row) = range.headers() {
             let natural_keys = natural_column_keys(&first_row, &opts.field_mode);
             let resolved_columns = resolve_columns(&columns, &natural_keys);
             headers = build_header_keys(&first_row, &resolved_columns, &opts.field_mode);
             resolved_row_opts.columns = resolved_columns;
             has_headers = !match_header_row_below;
-            col_keys = first_row;
+            col_keys = first_row.to_vec();
         }
     } else {
         let num_cols = range.get_size().1;
@@ -409,11 +432,13 @@ pub async fn read_csv_core<'a>(
         // back to lazily-built A1/C01-style names below.
         let capture_header = detected.header_index.is_some();
         let header_row_index = detected.header_index.unwrap_or(0);
+        let header_row_span = opts.effective_header_row_span();
 
         let mut rows: Vec<IndexMap<String, Value>> =
             Vec::with_capacity(if capture_rows { max_line_usize } else { 0 });
         let mut headers: Vec<String> = vec![];
         let mut resolved_row_opts = opts.rows.clone();
+        let mut header_row_buffer: Vec<Vec<String>> = Vec::new();
         // With omit_header, no line is ever a header source -- fallback (A1/C01) keys are
         // derived once, lazily, from the first eligible data row's column count.
         let mut fallback_keys_built = false;
@@ -432,7 +457,21 @@ pub async fn read_csv_core<'a>(
             // any skipped gap rows), not just rows that end up classified as data.
             total += 1;
 
-            if capture_header && row_index == header_row_index {
+            if capture_header && header_row_span > 1 && row_index >= header_row_index && row_index < header_row_index + header_row_span {
+                let raw: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+                header_row_buffer.push(raw);
+                if row_index == header_row_index + header_row_span - 1 {
+                    let combined = combine_header_rows(&header_row_buffer);
+                    let natural_keys = natural_column_keys(&combined, &opts.field_mode);
+                    let resolved_columns = resolve_columns(&opts.rows.columns, &natural_keys);
+                    headers = build_header_keys(&combined, &resolved_columns, &opts.field_mode);
+                    resolved_row_opts.columns = resolved_columns;
+                }
+                row_index += 1;
+                continue;
+            }
+
+            if capture_header && header_row_span <= 1 && row_index == header_row_index {
                 let raw: Vec<String> = record.iter().map(|s| s.to_string()).collect();
                 let natural_keys = natural_column_keys(&raw, &opts.field_mode);
                 let resolved_columns = resolve_columns(&opts.rows.columns, &natural_keys);
@@ -458,13 +497,20 @@ pub async fn read_csv_core<'a>(
             if capture_rows {
                 if line_count < max_line_usize {
                     if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
-                        rows.push(to_index_map(&row, &headers));
+                        let mut row_map = to_index_map(&row, &headers, Some(&resolved_row_opts.columns));
+                        if resolved_row_opts.omit_null_values {
+                            omit_null_values(&mut row_map);
+                        }
+                        rows.push(row_map);
                         line_count += 1;
                     }
                 }
             } else if let Some(save_method) = save_opt.as_ref() {
                 if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
-                    let row_map = to_index_map(&row, &headers);
+                    let mut row_map = to_index_map(&row, &headers, Some(&resolved_row_opts.columns));
+                    if resolved_row_opts.omit_null_values {
+                        omit_null_values(&mut row_map);
+                    }
                     save_method(row_map)?;
                 }
             }
@@ -488,7 +534,11 @@ fn workbook_row_to_map(
     opts: &RowOptionSet,
     headers: &[String],
 ) -> IndexMap<String, Value> {
-    to_index_map(&workbook_row_to_values(row, opts), headers)
+    let mut row_map = to_index_map(&workbook_row_to_values(row, opts), headers, Some(&opts.columns));
+    if opts.omit_null_values {
+        omit_null_values(&mut row_map);
+    }
+    row_map
 }
 
 // Convert an array of row data to a vector of serde_json::Value objects
@@ -780,6 +830,15 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
             process_numeric_value(value, def_val, |n| float_value(n.round_decimal(places)))
         }
         Format::Float => process_numeric_value(value, def_val, float_value),
+        // Pre-existing gap, not new to Format::Array: process_string_value had no
+        // Format::Integer arm at all, unlike csv_cell_to_json_value's own separate
+        // numeric-sniffing logic which already handles it correctly for a whole cell --
+        // a native xlsx/ods *string* cell (or, now, any Format::Array element) under
+        // Format::Integer silently passed through as a plain string. Same truncate-not-
+        // round behavior as the existing Integer handling elsewhere (58.2 -> 58).
+        Format::Integer => process_numeric_value(value, def_val, |n| {
+            Number::from_i128(n as i128).map(Value::Number).unwrap_or(Value::Null)
+        }),
         Format::Date => process_date_value(value, def_val, guess_date_string),
         Format::DateTime => process_date_value(value, def_val, guess_datetime_string),
         Format::DateTimeSimple => process_date_value(value, def_val, |s| {
@@ -795,6 +854,7 @@ fn process_string_value(value: &str, format: Format, def_val: Option<Value>) -> 
                 .and_then(|full| extract_time_portion(&full, true))
                 .or_else(|| parse_bare_time_string(s))
         }),
+        Format::Array(element_format, separator) => process_array_value(value, &element_format, &separator),
         _ => Value::String(value.to_owned()),
     }
 }
@@ -830,6 +890,22 @@ where
     } else {
         def_val.unwrap_or(Value::Null)
     }
+}
+
+/// Splits `value` on `separator` via `to_segments` (no hand-rolled `.split()`), trims
+/// each piece, and formats it as `element_format` by recursing into process_string_value
+/// -- reusing the exact same per-format parsing every ordinary scalar cell already goes
+/// through, rather than reimplementing it per element. Each element's own def_val is
+/// always None: a single unparseable piece becomes null in place (visible, positional)
+/// rather than substituting some row/column-wide default into the middle of an array.
+fn process_array_value(value: &str, element_format: &Format, separator: &str) -> Value {
+    Value::Array(
+        value
+            .to_segments(separator)
+            .iter()
+            .map(|segment| process_string_value(segment.trim(), element_format.clone(), None))
+            .collect(),
+    )
 }
 
 // Convert csv rows to value
@@ -885,15 +961,30 @@ fn csv_cell_to_json_value(cell: &str, opts: &RowOptionSet, index: usize) -> Valu
                     .or_else(|| parse_bare_time_string(s))
             })
         }
+        // Checked early, same as the date/time formats above and for the same reason:
+        // a multi-value cell like "34.8,78.3" would otherwise be misread by the
+        // numeric-looks-like sniffing below, which only ever sees to_first_number's
+        // *first* match and would silently drop everything after the first separator.
+        Format::Array(ref element_format, ref separator) => {
+            return process_array_value(cell, element_format, separator)
+        }
         _ => {}
     }
     let has_number = cell.to_first_number::<f64>().is_some();
+    // Strips a leading/trailing currency symbol or other decoration ("£1,999.99",
+    // "$45.50") that to_first_number already looks past to detect a number, but which
+    // the is_numeric() check below (and Number::from_str after it) would otherwise
+    // reject outright. Trims only non-alphanumeric symbol characters -- never a letter --
+    // so a genuine alphanumeric identifier like "SKU001" is left completely untouched
+    // (an earlier version of this fix trimmed by "not a digit", which also ate the "SKU"
+    // prefix, turning it into the bare digits "001" and misreading it as a real number).
+    let trimmed_cell = cell.trim_matches(|c: char| !c.is_alphanumeric() && c != ',' && c != '.' && c != '-');
     let num_cell = if has_number {
-        let euro_num_mode = uses_decimal_comma(cell, euro_num_mode);
+        let euro_num_mode = uses_decimal_comma(trimmed_cell, euro_num_mode);
         if euro_num_mode {
-            cell.replace(",", ".").replace(",", ".")
+            trimmed_cell.replace(",", ".").replace(",", ".")
         } else {
-            cell.replace(",", "")
+            trimmed_cell.replace(",", "")
         }
     } else {
         cell.to_owned()
@@ -963,9 +1054,10 @@ pub async fn read_workbook_sheet_info<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{helpers::*, Column};
+    use crate::{helpers::*, Column, KeySegment};
     use serde_json::json;
     use std::path;
+    use std::sync::Arc;
 
     /// Generates a workbook laid out the way many real-world spreadsheets are: a title
     /// row, a notes row, the real header row, a blank gap row, then the actual data --
@@ -1011,6 +1103,65 @@ mod tests {
         let path = std::env::temp_dir().join(filename);
         workbook.save(&path).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    /// The user's own motivating example for header_row_span: a merged "2015"/"2025"
+    /// year row (calamine only ever reports a merge's value in its top-left cell,
+    /// leaving the rest blank -- reproduced here by simply not writing anything to
+    /// those cells, no real xlsx merge syntax needed since combine_header_rows can't
+    /// tell the difference anyway) over a "North"/"Midlands"/"South" sub-label row,
+    /// then one data row.
+    fn gen_multi_row_header_fixture(filename: &str) -> String {
+        use rust_xlsxwriter::Workbook;
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "2015").unwrap();
+        // (0,1) and (0,2) intentionally left blank -- the merge shadow
+        sheet.write_string(0, 3, "2025").unwrap();
+        // (0,4) and (0,5) intentionally left blank
+        sheet.write_string(1, 0, "North").unwrap();
+        sheet.write_string(1, 1, "Midlands").unwrap();
+        sheet.write_string(1, 2, "South").unwrap();
+        sheet.write_string(1, 3, "North").unwrap();
+        sheet.write_string(1, 4, "Midlands").unwrap();
+        sheet.write_string(1, 5, "South").unwrap();
+        sheet.write_number(2, 0, 100.0).unwrap();
+        sheet.write_number(2, 1, 101.0).unwrap();
+        sheet.write_number(2, 2, 102.0).unwrap();
+        sheet.write_number(2, 3, 200.0).unwrap();
+        sheet.write_number(2, 4, 201.0).unwrap();
+        sheet.write_number(2, 5, 202.0).unwrap();
+        let path = std::env::temp_dir().join(filename);
+        workbook.save(&path).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_header_row_span_combines_a_merged_year_row_with_a_region_row_xlsx() {
+        let path = gen_multi_row_header_fixture("multi_row_header.xlsx");
+        let opts = OptionSet::new(&path).header_row(0).header_row_span(2);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1, "both header rows must be consumed, not leak through as data");
+        let row = &rows[0];
+        // genuine Data::Float xlsx cells (written via write_number)
+        assert_eq!(row.get("2015_north"), Some(&json!(100.0)));
+        assert_eq!(row.get("2015_midlands"), Some(&json!(101.0)));
+        assert_eq!(row.get("2015_south"), Some(&json!(102.0)));
+        assert_eq!(row.get("2025_north"), Some(&json!(200.0)));
+        assert_eq!(row.get("2025_midlands"), Some(&json!(201.0)));
+        assert_eq!(row.get("2025_south"), Some(&json!(202.0)));
+    }
+
+    #[test]
+    fn test_header_row_span_default_of_one_is_unchanged_from_today_xlsx() {
+        // header_row_span left at its default (1) -- must behave byte-for-byte like the
+        // existing single-header-row path, using the same fixture as the gap-row test.
+        let path = gen_header_gap_fixture("single_row_header_unchanged.xlsx");
+        let opts = OptionSet::new(&path).header_row(2).data_row_index(4);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("sku"), Some(&json!("SKU001")));
+        assert_eq!(rows[0].get("qty"), Some(&json!(10.0)));
     }
 
     #[test]
@@ -1229,6 +1380,89 @@ mod tests {
         assert!(first.get("weight_lbs").is_some());
         assert!(first.get("weight").is_none());
         assert_eq!(first.get("id").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_column_key_as_key_segment_nests_two_columns_into_one_object_end_to_end() {
+        // Integration coverage for Column.key: Option<KeySegment> actually being
+        // consulted through the real process_spreadsheet_direct pipeline, not just the
+        // isolated insert_key_segment unit tests in key_segment.rs -- "weight" and
+        // "height" (two ordinary flat columns in the sample CSV) are remapped to nest
+        // under one "measurements" object instead of staying flat siblings.
+        let sample_path = "data/sample-data-1.csv";
+        let mut opts = OptionSet::new(sample_path).max_row_count(1);
+
+        let mut weight_col = Column::from_source_key_with_format("weight", None, Format::Integer, None, DateTimeMode::Full, false);
+        weight_col.key = Some(KeySegment::Object(Arc::from("measurements"), Arc::new(KeySegment::Simple(Arc::from("weight")))));
+
+        let mut height_col = Column::from_source_key_with_format("height", None, Format::Integer, None, DateTimeMode::Full, false);
+        height_col.key = Some(KeySegment::Object(Arc::from("measurements"), Arc::new(KeySegment::Simple(Arc::from("height")))));
+
+        opts.rows.columns = vec![weight_col, height_col];
+
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        let first = rows.first().expect("at least one row");
+
+        // both original flat columns are gone -- their values only exist nested now
+        assert!(first.get("weight").is_none());
+        assert!(first.get("height").is_none());
+
+        let measurements = first.get("measurements").expect("measurements object present");
+        assert_eq!(measurements.get("weight").unwrap(), 103);
+        assert_eq!(measurements.get("height").unwrap(), 164);
+    }
+
+    #[test]
+    fn test_column_from_json_nested_key_segment_drives_real_output_end_to_end() {
+        // Same nesting as the test above, but built entirely from JSON via
+        // Column::from_json/OptionSet::override_columns -- the path a frontend UI or Web
+        // API would actually use, with no Rust KeySegment construction at all.
+        let sample_path = "data/sample-data-1.csv";
+        let opts = OptionSet::new(sample_path).max_row_count(1).override_columns(&[
+            serde_json::json!({
+                "source_key": "weight",
+                "format": "integer",
+                "key": {"type": "object", "key": "measurements", "next": "weight"}
+            }),
+            serde_json::json!({
+                "source_key": "height",
+                "format": "integer",
+                "key": {"type": "object", "key": "measurements", "next": "height"}
+            }),
+        ]);
+
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        let first = rows.first().expect("at least one row");
+
+        assert!(first.get("weight").is_none());
+        assert!(first.get("height").is_none());
+        let measurements = first.get("measurements").expect("measurements object present");
+        assert_eq!(measurements.get("weight").unwrap(), 103);
+        assert_eq!(measurements.get("height").unwrap(), 164);
+    }
+
+    #[test]
+    fn test_omit_null_values_row_option_drops_null_keys_end_to_end() {
+        // Format::Truthy on "maybe" (not a recognised yes/no token, no default) is a
+        // clean, deliberate way to produce a genuine Value::Null for this test.
+        let path = write_csv_fixture("omit_null_values.csv", "title,status\nTitle 1,maybe\n");
+        let cols = vec![Column::from_source_key_with_format("status", None, Format::Truthy, None, DateTimeMode::Full, false)];
+
+        // default (off): the null key is still present
+        let mut opts_default = OptionSet::new(&path);
+        opts_default.rows.columns = cols.clone();
+        let rows = process_spreadsheet_direct(&opts_default).unwrap().to_vec();
+        assert_eq!(rows[0].get("status"), Some(&Value::Null));
+
+        // opted in: the null key is dropped entirely
+        let mut opts_omit = OptionSet::new(&path);
+        opts_omit.rows.columns = cols;
+        opts_omit.rows.omit_null_values = true;
+        let rows = process_spreadsheet_direct(&opts_omit).unwrap().to_vec();
+        assert!(rows[0].get("status").is_none());
+        assert_eq!(rows[0].get("title"), Some(&json!("Title 1")));
     }
 
     #[test]
@@ -1699,6 +1933,86 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_cell_float_format_strips_a_currency_symbol_but_keeps_the_decimal() {
+        // Regression: to_first_number() already looks past a leading "£"/"$" to detect
+        // that a cell has a number in it, but the actual value-cleaning step only ever
+        // stripped commas -- the symbol itself made is_numeric() reject the cleaned
+        // string outright, so a currency-formatted cell fell through to plain string
+        // passthrough instead of being cast at all.
+        let cols = vec![Column::new_format(Format::Float, None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("£1,999.99", &row_opts, 0), json!(1999.99));
+        assert_eq!(csv_cell_to_json_value("$45.50", &row_opts, 0), json!(45.50));
+        assert_eq!(csv_cell_to_json_value("1999.99", &row_opts, 0), json!(1999.99));
+        assert_eq!(csv_cell_to_json_value("abc", &row_opts, 0), Value::String("abc".to_string()));
+    }
+
+    #[test]
+    fn test_format_array_splits_and_formats_each_element_via_to_segments() {
+        let cols = vec![Column::new_format(Format::Array(Arc::new(Format::Float), Arc::from(",")), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("34.8,78.3", &row_opts, 0), json!([34.8, 78.3]));
+        // whitespace around a piece is trimmed before formatting
+        assert_eq!(csv_cell_to_json_value(" 34.8 , 78.3 ", &row_opts, 0), json!([34.8, 78.3]));
+    }
+
+    #[test]
+    fn test_format_array_is_not_misread_as_a_bare_number_by_numeric_sniffing() {
+        // Regression guard: to_first_number("34.8,78.3") matches "34.8" alone, so
+        // Format::Array must be checked before csv_cell_to_json_value's generic
+        // numeric-looks-like branch, or "78.3" would silently vanish.
+        let cols = vec![Column::new_format(Format::Array(Arc::new(Format::Float), Arc::from(",")), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        let result = csv_cell_to_json_value("34.8,78.3", &row_opts, 0);
+        assert_eq!(result.as_array().map(|a| a.len()), Some(2));
+    }
+
+    #[test]
+    fn test_format_array_with_text_elements_matches_the_original_tags_use_case() {
+        let cols = vec![Column::new_format(Format::Array(Arc::new(Format::Text), Arc::from(",")), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("lions,Kenya", &row_opts, 0), json!(["lions", "Kenya"]));
+    }
+
+    #[test]
+    fn test_format_from_str_array_syntax_round_trips_through_actual_cell_processing() {
+        // End-to-end: the parsed Format::Array (from spread-cli's future --keys shorthand,
+        // e.g. "int[](|)") actually drives real splitting into real integers, not just
+        // the right enum shape -- this depends on the process_string_value Integer fix
+        // above; without it this would produce ["34","78","9"] (strings) instead.
+        let cols = vec![Column::new_format(Format::from_str("int[](|)").unwrap(), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("34|78|9", &row_opts, 0), json!([34, 78, 9]));
+
+        let text_cols = vec![Column::new_format(Format::from_str("string[](|)").unwrap(), None)];
+        let text_row_opts = RowOptionSet::simple(&text_cols);
+        assert_eq!(
+            csv_cell_to_json_value("lions|Kenya", &text_row_opts, 0),
+            json!(["lions", "Kenya"])
+        );
+    }
+
+    #[test]
+    fn test_format_array_element_that_fails_to_parse_becomes_null_in_place() {
+        // A single bad element becomes null at its own position rather than discarding
+        // the whole array or substituting some unrelated default into the middle of it.
+        let cols = vec![Column::new_format(Format::Array(Arc::new(Format::Float), Arc::from(",")), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        assert_eq!(csv_cell_to_json_value("34.8,not-a-number", &row_opts, 0), json!([34.8, null]));
+    }
+
+    #[test]
+    fn test_format_array_on_a_native_float_cell_has_nothing_to_split_so_stays_a_plain_number() {
+        // A genuine numeric xlsx/ods cell was never a delimited string to begin with --
+        // Format::Array falls through to the ordinary Value::Number catch-all rather than
+        // wrapping a single float in a one-element array.
+        let cols = vec![Column::new_format(Format::Array(Arc::new(Format::Float), Arc::from(",")), None)];
+        let row_opts = RowOptionSet::simple(&cols);
+        let cell = Data::Float(34.8);
+        assert_eq!(workbook_cell_to_value(&cell, &row_opts, 0), json!(34.8));
+    }
+
+    #[test]
     fn test_csv_cell_does_not_coerce_ids_to_booleans() {
         // Regression test: these previously became `true`/`false` because their
         // embedded digit run (e.g. "SKU001" -> "001" -> 1) was fuzzily extracted
@@ -1758,6 +2072,28 @@ mod tests {
         assert_eq!(rows.len(), 2, "just SKU001 and SKU002");
         assert_eq!(rows[0].get("sku"), Some(&json!("SKU001")));
         assert_eq!(rows[1].get("sku"), Some(&json!("SKU002")));
+    }
+
+    #[test]
+    fn test_csv_header_row_span_combines_a_merged_year_row_with_a_region_row() {
+        // Same shape as the user's original example, as plain CSV -- the merge-shadow
+        // cells are just empty fields, no different from any other blank CSV field.
+        let path = write_csv_fixture(
+            "csv_multi_row_header.csv",
+            "2015,,,2025,,\nNorth,Midlands,South,North,Midlands,South\n100,101,102,200,201,202\n",
+        );
+        let opts = OptionSet::new(&path).header_row(0).header_row_span(2);
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1, "both header rows must be consumed, not leak through as data");
+        let row = &rows[0];
+        // plain integer-looking CSV text ("100", no decimal point) auto-types as an
+        // integer, unlike the xlsx fixture's genuine Data::Float cells
+        assert_eq!(row.get("2015_north"), Some(&json!(100)));
+        assert_eq!(row.get("2015_midlands"), Some(&json!(101)));
+        assert_eq!(row.get("2015_south"), Some(&json!(102)));
+        assert_eq!(row.get("2025_north"), Some(&json!(200)));
+        assert_eq!(row.get("2025_midlands"), Some(&json!(201)));
+        assert_eq!(row.get("2025_south"), Some(&json!(202)));
     }
 
     #[test]

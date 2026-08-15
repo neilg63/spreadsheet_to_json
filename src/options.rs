@@ -4,8 +4,10 @@ use serde_json::{json, Error, Value};
 use simple_string_patterns::{SimpleMatch, StripCharacters};
 use to_segments::ToSegments;
 use std::{path::Path, str::FromStr, sync::Arc};
+use enclose_strings::SimpleExtract;
 
 use is_truthy::TruthyRuleSet;
+use crate::key_segment::KeySegment;
 /// default max number of rows in direct single sheet mode without an override via ->max_row_count(max_row_count)
 pub const DEFAULT_MAX_ROWS: usize = 10_000;
 /// default max number of rows multiple sheet preview mode without an override via ->max_row_count(max_row_count)
@@ -53,6 +55,12 @@ pub struct RowOptionSet {
   /// own `Format` override, or its own `datetime_mode` on a `Format::Auto` column, takes
   /// precedence over this row-wide default; see `Column::datetime_mode`.
   pub datetime_mode: DateTimeMode,
+  /// When set, any key whose value is JSON `null` is dropped from the row entirely
+  /// (recursively, through nested objects built via `KeySegment::Object`/`Array`/
+  /// `InnerObject` too) rather than being emitted as `"key": null`. Only ever targets
+  /// genuine `Value::Null` -- an empty string ("") is a different, deliberate value and
+  /// is left alone. Off by default: existing output is unchanged unless opted into.
+  pub omit_null_values: bool,
 }
 
 impl RowOptionSet {
@@ -62,6 +70,7 @@ impl RowOptionSet {
     RowOptionSet {
       decimal_comma: false,
       datetime_mode: DateTimeMode::Full,
+      omit_null_values: false,
       columns: cols.to_vec()
     }
   }
@@ -71,6 +80,7 @@ impl RowOptionSet {
     RowOptionSet {
       decimal_comma,
       datetime_mode,
+      omit_null_values: false,
       columns: cols.to_vec()
     }
   }
@@ -112,6 +122,17 @@ pub struct OptionSet {
   /// captured as headers nor as data -- for spreadsheets that leave a note, blank, or
   /// subtitle row between the header and the first real data row.
   pub data_row_index: Option<usize>,
+  /// Number of consecutive rows, starting at the header row, that together form the
+  /// header -- e.g. a spreadsheet with a merged "2015"/"2010" year row followed by a
+  /// "Female"/"Male" sub-label row underneath needs a span of 2. Column keys are built
+  /// by forward-filling blanks *within* each header row independently (so a value from a
+  /// merged cell -- which calamine only ever reports in that cell's top-left position,
+  /// leaving the rest of the merge blank -- carries across the columns it visually spans)
+  /// and then joining each column's non-blank values down the span with `_`. Defaults to
+  /// `1` -- a single header row, today's only behavior -- via `effective_header_row_span`
+  /// rather than this field's own zero value, so `OptionSet::default()` (whose derived
+  /// `Default` gives `0`, not `1`) never accidentally changes behavior.
+  pub header_row_span: usize,
   /// Whether to run best-guess header/data-row detection (see
   /// `detect::detect_header_and_data_rows`) when both `header_row` and `data_row_index`
   /// are unset, instead of assuming row 0 is the header. Off (`false`) by default for
@@ -137,6 +158,7 @@ impl OptionSet {
         omit_header: false,
         header_row: None,
         data_row_index: None,
+        header_row_span: 1,
         detect_header: false,
         read_mode: ReadMode::Sync,
         field_mode: FieldNameMode::AutoA1,
@@ -199,6 +221,21 @@ impl OptionSet {
   pub fn data_row_index(mut self, row: usize) -> Self {
       self.data_row_index = Some(row);
       self
+  }
+
+  /// Sets the number of consecutive rows, starting at the header row, that together
+  /// form the header -- see `header_row_span`'s field doc for what multi-row headers
+  /// this is for.
+  pub fn header_row_span(mut self, span: usize) -> Self {
+      self.header_row_span = span;
+      self
+  }
+
+  /// `header_row_span`, normalized to at least `1` -- the field's own derived-Default
+  /// value is `0`, which isn't a meaningful span (a header can't span zero rows), so
+  /// every consumer reads it through this method rather than the raw field.
+  pub fn effective_header_row_span(&self) -> usize {
+      self.header_row_span.max(1)
   }
 
   /// Opts into best-guess header/data-row detection when both `header_row` and
@@ -404,11 +441,11 @@ impl OptionSet {
   /// row is being consumed for headers in the first place, so there's nothing to skip
   /// past.
   pub fn first_data_row_index(&self) -> Option<usize> {
-    if self.header_row.is_none() && self.data_row_index.is_none() {
+    if self.header_row.is_none() && self.data_row_index.is_none() && self.effective_header_row_span() <= 1 {
       return None;
     }
     let header_row_index = self.header_row_index();
-    let default_start = if self.omit_header { header_row_index } else { header_row_index + 1 };
+    let default_start = if self.omit_header { header_row_index } else { header_row_index + self.effective_header_row_span() };
     match self.data_row_index {
       Some(requested) if requested >= header_row_index => Some(requested),
       _ => Some(default_start),
@@ -468,7 +505,14 @@ pub enum Format {
   DateTimeCustom(Arc<str>),
   Truthy, // interpret common yes/no, y/n, true/false text strings as true/false
   #[allow(dead_code)]
-  TruthyCustom(TruthyRuleSet) // define custom yes/no values
+  TruthyCustom(TruthyRuleSet), // define custom yes/no values
+  /// Splits a delimited string cell into an array, formatting each piece as the given
+  /// element Format -- e.g. Format::Array(Format::Float, ",") turns "34.8,78.3" into
+  /// [34.8, 78.3]. `Arc<Format>` rather than a bare `Format`, since a bare recursive
+  /// field would give Format infinite size; `Arc` (not `Box`) for the same cheap-clone
+  /// reasoning already applied to the rest of this crate's recursive/repeatedly-cloned
+  /// types (Format is cloned per column during resolution, same as Column's own fields).
+  Array(Arc<Format>, Arc<str>),
 }
 
 impl std::fmt::Display for Format {
@@ -482,7 +526,7 @@ impl std::fmt::Display for Format {
       Self::Boolean => "boolean".to_string(),
       Self::Date => "date".to_string(),
       Self::DateTime => "datetime".to_string(),
-      Self::DateTimeSimple => "simple".to_string(),
+      Self::DateTimeSimple => "datetime_simple".to_string(),
       Self::Time => "time".to_string(),
       Self::Hm => "hm".to_string(),
       Self::DateTimeCustom(fmt) => format!("datetime({})", fmt),
@@ -492,6 +536,7 @@ impl std::fmt::Display for Format {
         let false_str: Vec<String> = rules.false_options().iter().map(|o| o.pattern().to_string()).collect();
         format!("truthy({},{})", true_str.join("|"), false_str.join("|"))
       },
+      Self::Array(fmt, sep) => format!("array({},{})", fmt, sep),
     };
     write!(f, "{}", result)
   }
@@ -500,25 +545,45 @@ impl std::fmt::Display for Format {
 impl FromStr for Format {
   type Err = Error;
   fn from_str(key: &str) -> Result<Self, Self::Err> {
-      let fmt = match key {
+    let is_array = str::contains(key, "[]");
+    let base_key = if is_array {
+      key.to_head("[")
+    } else {
+      key.to_string()
+    };
+    let clean_key = base_key.trim().to_lowercase().strip_non_alphanum();
+
+    let array_splitter = if is_array {
+      let raw = key.to_tail("]").extract_from_parentheses().unwrap_or(",".to_string());
+      // Accept a JS-like quoted separator, e.g. "text[].split(',')" -- strip a matching
+      // pair of quotes if present, otherwise use the extracted content as-is (the plain
+      // "(,)" case, which was never quoted to begin with).
+      let unquoted = raw.extract_from_single_quotes()
+        .or_else(|| raw.extract_from_double_quotes())
+        .unwrap_or(raw);
+      Some(unquoted)
+    } else {
+      None
+    };
+      let fmt = match clean_key.as_str() {
         "s" | "str" | "string" | "t" | "txt" | "text" => Self::Text,
         "i" | "int" | "integer" => Self::Integer,
-        "d1" | "decimal_1" => Self::Decimal(1),
-        "d2" | "decimal_2" => Self::Decimal(2),
-        "d3" | "decimal_3" => Self::Decimal(3),
-        "d4" | "decimal_4" => Self::Decimal(4),
-        "d5" | "decimal_5" => Self::Decimal(5),
-        "d6" | "decimal_6" => Self::Decimal(6),
-        "d7" | "decimal_7" => Self::Decimal(7),
-        "d8" | "decimal_8" => Self::Decimal(8),
+        "d1" | "dec1" | "decimal1" => Self::Decimal(1),
+        "d2" | "dec2" | "decimal2" => Self::Decimal(2),
+        "d3" | "dec3" | "decimal3" => Self::Decimal(3),
+        "d4" | "dec4" | "decimal4" => Self::Decimal(4),
+        "d5" | "dec5" | "decimal5" => Self::Decimal(5),
+        "d6" | "dec6" | "decimal6" => Self::Decimal(6),
+        "d7" | "dec7" | "decimal7" => Self::Decimal(7),
+        "d8" | "dec8" | "decimal8" => Self::Decimal(8),
         "fl" | "f" | "float" => Self::Float,
         "b" | "bool" | "boolean" => Self::Boolean,
         "da" | "date" => Self::Date,
         "dt" | "datetime" => Self::DateTime,
-        "ds" | "simple" | "datetime_simple" => Self::DateTimeSimple,
+        "ds" | "datetimesimple" => Self::DateTimeSimple,
         "ti" | "time" => Self::Time,
-        "hm" | "hoursminutes" => Self::Hm,
-        "tr" | "truthy" => Self::Truthy,
+        "hm" | "hoursminutes" | "hourmin"=> Self::Hm,
+        "tr" | "truthy" | "true" => Self::Truthy,
         _ => {
           if let Some(str) = match_custom_dt(key) {
             Self::DateTimeCustom(Arc::from(str))
@@ -529,7 +594,12 @@ impl FromStr for Format {
           }
         },
       };
-      Ok(fmt)
+      if is_array {
+        let splitter = array_splitter.unwrap_or(",".to_string());
+        Ok(Self::Array(Arc::new(fmt), Arc::from(splitter.as_str())))
+      } else {
+        Ok(fmt)
+      }
   }
 }
 
@@ -547,6 +617,18 @@ fn match_custom_truthy(key: &str) -> Option<(String,String)> {
   if let (Some(head), Some(tail)) = test_str.to_head_tail(":") {
     if tail.len() > 1 && head.len() > 1 && head.starts_with_ci("tr") {
       if let (Some(yes), Some(no)) = tail.to_head_tail(",") {
+        if !yes.is_empty() && !no.is_empty() {
+          return Some((yes.to_string(), no.to_string()));
+        }
+      }
+    }
+  }
+  // Independent of the colon syntax above, not an alternative reached only when a ':'
+  // happens to be present too -- "true(vrai,faux)" has no ':' at all, so this has to be
+  // its own top-level attempt, not nested inside the colon branch's condition.
+  if test_str.to_head("(").starts_with_ci("tr") {
+    if let Some(inner) = test_str.extract_from_parentheses() {
+      if let (Some(yes), Some(no)) = inner.to_head_tail(",") {
         if !yes.is_empty() && !no.is_empty() {
           return Some((yes.to_string(), no.to_string()));
         }
@@ -589,7 +671,11 @@ fn datetime_mode_from_json(json: &Value) -> DateTimeMode {
 
 #[derive(Debug, Clone)]
 pub struct Column {
-  pub key:  Option<Arc<str>>,
+  /// Where a matched cell's value lands in the output row. `Some(KeySegment::Simple(_))`
+  /// is a plain rename, functionally identical to the old `Option<Arc<str>>` this field
+  /// used to be; the other variants describe nested/grouped placement -- see
+  /// `key_segment.rs`.
+  pub key: Option<KeySegment>,
   /// Natural (auto-detected, snake_cased) key to match this override against, regardless
   /// of the column's actual position. When None, the column applies positionally instead
   /// (matched by its index within the configured column list), as before.
@@ -661,11 +747,24 @@ impl Column {
         break;
       }
     }
-    if let Some(src) = source_key {
+    let mut col = if let Some(src) = source_key {
       Column::from_source_key_with_format(src, key_opt, fmt, default, datetime_mode, decimal_comma)
     } else {
       Column::from_key_ref_with_format(key_opt, fmt, default, datetime_mode, decimal_comma)
+    };
+    // key_opt above only ever handles a plain string (a non-string "key" -- the tagged
+    // object form -- silently became Simple("") through it, since as_str() on an object
+    // returns None). KeySegment::from_json is the real parser for "key": it handles the
+    // plain-string shorthand identically (so this is a harmless no-op re-assignment in
+    // that case) and additionally parses the full Object/Array/InnerObject/PlainArray/
+    // Excluded tree from a tagged JSON object -- the only way a client crate builds a
+    // nested KeySegment through JSON, without writing Rust or touching calamine/csv.
+    if let Some(key_json) = json.get("key") {
+      if let Some(segment) = KeySegment::from_json(key_json) {
+        col.key = Some(segment);
+      }
     }
+    col
 }
 
 
@@ -695,10 +794,7 @@ impl Column {
   }
 
   pub fn from_key_ref_with_format(key_opt: Option<&str>, format: Format, default: Option<Value>, datetime_mode: DateTimeMode, decimal_comma: bool) -> Self {
-    let mut key = None;
-    if let Some(k_str) = key_opt {
-      key = Some(Arc::from(k_str));
-    }
+    let key = key_opt.map(|k_str| KeySegment::Simple(Arc::from(k_str)));
     Column {
       key,
       source_key: None,
@@ -709,8 +805,12 @@ impl Column {
     }
   }
 
+  /// A flat, single-string fallback for contexts that only show one name per column
+  /// (header/metadata listings) -- for a plain rename (`KeySegment::Simple`) this is
+  /// the whole story; for a nested `key`, see `KeySegment`'s own `Display` impl for what
+  /// this collapses to.
   pub fn key_name(&self) -> String {
-    self.key.clone().unwrap_or(Arc::from("")).to_string()
+    self.key.as_ref().map(|k| k.to_string()).unwrap_or_default()
   }
 
   pub fn source_key_name(&self) -> String {
@@ -1012,7 +1112,93 @@ mod tests {
     let (true_keys, false_keys) = match_custom_truthy("tr:si,no").unwrap();
     assert_eq!("si", true_keys);
     assert_eq!("no", false_keys);
+
+    let (true_keys, false_keys) = match_custom_truthy("true(vrai,faux)").unwrap();
+    assert_eq!("vrai", true_keys);
+    assert_eq!("faux", false_keys);
   }
+
+  fn assert_array_format(parsed: Format, expected_element: &str, expected_separator: &str) {
+    match parsed {
+      Format::Array(element_fmt, separator) => {
+        assert_eq!(element_fmt.to_string(), expected_element);
+        assert_eq!(separator.as_ref(), expected_separator);
+      }
+      other => panic!("expected Format::Array, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn test_format_from_str_parses_the_documented_array_syntax() {
+    assert_array_format(Format::from_str("string[](|)").unwrap(), "text", "|");
+    assert_array_format(Format::from_str("int[](|)").unwrap(), "integer", "|");
+  }
+
+  #[test]
+  fn test_format_from_str_array_accepts_arbitrary_text_between_bracket_and_paren() {
+    // to_tail("]") + extract_from_parentheses() only care about "]" and the first "(...)"
+    // pair after it -- whatever text sits between them (".split", nothing at all) is
+    // never inspected, so "text[].split(,)" parses identically to "text[](,)".
+    assert_array_format(Format::from_str("text[].split(,)").unwrap(), "text", ",");
+    assert_array_format(Format::from_str("int[].split(|)").unwrap(), "integer", "|");
+  }
+
+  #[test]
+  fn test_format_from_str_array_strips_a_js_like_quoted_separator() {
+    assert_array_format(Format::from_str("text[].split(',')").unwrap(), "text", ",");
+    assert_array_format(Format::from_str(r#"text[].split(",")"#).unwrap(), "text", ",");
+    // an unquoted separator still works exactly as before -- quote-stripping is opt-in,
+    // not a requirement
+    assert_array_format(Format::from_str("text[](,)").unwrap(), "text", ",");
+  }
+
+  #[test]
+  fn test_format_from_str_array_defaults_to_comma_with_no_explicit_separator() {
+    assert_array_format(Format::from_str("int[]").unwrap(), "integer", ",");
+    assert_array_format(Format::from_str("string[]").unwrap(), "text", ",");
+  }
+
+  #[test]
+  fn test_format_from_str_array_accepts_the_same_loose_type_synonyms_as_scalars() {
+    // Same loose matching (case-insensitive, multiple synonyms) already used for plain
+    // scalar formats, now also recognised ahead of an array suffix.
+    for (key, expected) in [
+      ("s[](|)", "text"),
+      ("str[](|)", "text"),
+      ("STRING[](|)", "text"),
+      ("i[](|)", "integer"),
+      ("INTEGER[](|)", "integer"),
+      ("fl[](|)", "float"),
+      ("float[](|)", "float"),
+      ("d2[](|)", "decimal(2)"),
+      ("b[](|)", "boolean"),
+      ("da[](|)", "date"),
+    ] {
+      assert_array_format(Format::from_str(key).unwrap(), expected, "|");
+    }
+  }
+
+  #[test]
+  fn test_format_from_str_array_accepts_a_multi_character_separator() {
+    assert_array_format(Format::from_str("string[](::)").unwrap(), "text", "::");
+  }
+
+  #[test]
+  fn test_format_from_str_array_with_an_unrecognised_element_type_falls_back_to_auto() {
+    // Matches the existing plain-scalar behavior: an unrecognised type name falls back
+    // to Format::Auto rather than erroring -- the array wrapper doesn't change that.
+    assert_array_format(Format::from_str("bogus[](|)").unwrap(), "auto", "|");
+  }
+
+  #[test]
+  fn test_format_from_str_non_array_syntax_is_unaffected() {
+    // Regression guard: adding array-suffix parsing must not change plain scalar
+    // parsing, which has no "[]" in it at all.
+    assert_eq!(Format::from_str("int").unwrap().to_string(), "integer");
+    assert_eq!(Format::from_str("string").unwrap().to_string(), "text");
+    assert_eq!(Format::from_str("d3").unwrap().to_string(), "decimal(3)");
+  }
+
 
   #[test]
   fn test_first_data_row_index_defaults_to_none_when_both_unset() {

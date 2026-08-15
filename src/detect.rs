@@ -224,7 +224,10 @@ pub(crate) fn resolve_header_and_data_rows<F: FnOnce() -> Vec<Vec<String>>>(
   opts: &OptionSet,
   sample: F,
 ) -> DetectedRows {
-  if opts.detect_header && !opts.omit_header && opts.header_row.is_none() && opts.data_row_index.is_none() {
+  // header_row_span > 1 is as much an explicit override as header_row/data_row_index --
+  // best-guess detection has no way to recognize a multi-row header shape, so setting a
+  // span opts out of guessing the same way an explicit row index already does.
+  if opts.detect_header && !opts.omit_header && opts.header_row.is_none() && opts.data_row_index.is_none() && opts.effective_header_row_span() <= 1 {
     return detect_header_and_data_rows(&sample());
   }
   // Inlined rather than going through OptionSet::first_data_row_index(), which returns
@@ -232,7 +235,7 @@ pub(crate) fn resolve_header_and_data_rows<F: FnOnce() -> Vec<Vec<String>>>(
   // case -- that method's early return exists for a different caller (direct library use
   // that wants to skip its own gating check entirely), not this always-resolve context.
   let header_row_index = opts.header_row_index();
-  let default_start = if opts.omit_header { header_row_index } else { header_row_index + 1 };
+  let default_start = if opts.omit_header { header_row_index } else { header_row_index + opts.effective_header_row_span() };
   let data_index = match opts.data_row_index {
     Some(requested) if requested >= header_row_index => requested,
     _ => default_start,

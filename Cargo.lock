@@ -186,6 +186,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "enclose-strings"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a159ae1d9d827aa1b9d9aacb555fc9d5e817859dc0c2521f2ea9b5bf87643585"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -596,12 +602,13 @@ dependencies = [
 
 [[package]]
 name = "spreadsheet-to-json"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "alphanumeric",
  "calamine",
  "chrono",
  "csv",
+ "enclose-strings",
  "fuzzy-datetime",
  "heck",
  "indexmap",

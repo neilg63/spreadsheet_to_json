@@ -5,7 +5,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::{OptionSet, PathData, ReadMode};
+use crate::key_segment::insert_key_segment;
+use crate::{Column, OptionSet, PathData, ReadMode};
 
 
 /// Core info about a spreadsheet with extension, matched worksheet name and index an all worksheet keys
@@ -330,14 +331,57 @@ impl DataSet {
 }
 
 
-pub fn to_index_map(row: &[serde_json::Value], headers: &[String]) -> IndexMap<String, Value> {
-    let mut hm: IndexMap<String, serde_json::Value> = IndexMap::new();
+/// Builds a row's output map. A column with no `key` (or a plain `KeySegment::Simple`)
+/// inserts flatly under `headers[sub_index]`, exactly as before this function supported
+/// nesting at all. A column with a nested `key` (`Object`/`Array`/`InnerObject`) walks
+/// that path instead, via `insert_key_segment` -- see `key_segment.rs`. `columns` is
+/// optional so existing callers that only ever built flat rows (no nested mapping in
+/// play) don't need to thread a `&[Column]` through just to get today's behavior.
+pub fn to_index_map(row: &[serde_json::Value], headers: &[String], columns: Option<&[Column]>) -> IndexMap<String, Value> {
+    let mut hm: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     for (sub_index, hk) in headers.iter().enumerate() {
         if let Some(cell) = row.get(sub_index) {
-            hm.insert(hk.to_owned(), cell.to_owned());
+            let segment = columns.and_then(|cols| cols.get(sub_index)).and_then(|c| c.key.as_ref());
+            match segment {
+                Some(key_segment) => insert_key_segment(&mut hm, key_segment, cell.to_owned()),
+                None => {
+                    hm.insert(hk.to_owned(), cell.to_owned());
+                }
+            }
         }
     }
-    hm
+    hm.into_iter().collect()
+}
+
+/// Drops every key whose value is JSON `null` from `row`, recursively through nested
+/// objects (built via `KeySegment::Object`/`Array`/`InnerObject`) and into array items
+/// too -- but never removes an array *element* itself, even a bare `null` one; "omit
+/// null cells" is a per-key/per-field concept, not a positional one (an array's own
+/// null-dropping, where that's wanted, is `KeySegment::PlainArray`'s job at insertion
+/// time, not this row-wide pass). Only ever targets genuine `Value::Null` -- an empty
+/// string is a different, deliberate value and is left alone.
+pub fn omit_null_values(row: &mut IndexMap<String, Value>) {
+    row.retain(|_, v| !v.is_null());
+    for v in row.values_mut() {
+        strip_nested_nulls(v);
+    }
+}
+
+fn strip_nested_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            for v in map.values_mut() {
+                strip_nested_nulls(v);
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                strip_nested_nulls(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn match_sheet_name_and_index(workbook: &mut Sheets<BufReader<File>>, opts: &OptionSet) -> (Vec<String>, Vec<String>, Vec<usize>) {
@@ -380,6 +424,29 @@ mod tests {
 
   fn opts_selecting(sheet_key: &str) -> OptionSet {
     OptionSet::new(SAMPLE_PATH).sheet_name(sheet_key)
+  }
+
+  #[test]
+  fn test_omit_null_values_drops_top_level_and_nested_nulls_but_not_empty_strings() {
+    let mut row: IndexMap<String, Value> = serde_json::from_value(serde_json::json!({
+      "title": "Title 1",
+      "notes": "",
+      "download_2": null,
+      "measurements": {"weight": 60, "height": null},
+      "tags": ["a", null, "b"]
+    })).unwrap();
+    omit_null_values(&mut row);
+    assert_eq!(
+      serde_json::to_value(&row).unwrap(),
+      serde_json::json!({
+        "title": "Title 1",
+        "notes": "",
+        "measurements": {"weight": 60},
+        // array *elements* are never dropped, only object keys -- see the function's
+        // own doc comment for why (positional vs per-key are different concepts)
+        "tags": ["a", null, "b"]
+      })
+    );
   }
 
   #[test]

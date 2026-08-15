@@ -30,6 +30,8 @@ It supports the following formats:
 - Can identify numeric fields formatted as text and convert them to integers or floats.
 - Can identify truthy text or number cells and convert them to booleans
 - Can save large files asynchronously
+- Can reshape output beyond flat key/value pairs -- nested objects, dynamic-keyed groups, or arrays of objects -- via `KeySegment` (see [Nested output](#nested-output) below), buildable either in Rust or from a plain JSON payload for non-Rust client crates
+- Can drop null-valued keys from output recursively via `RowOptionSet::omit_null_values`, instead of emitting `"key": null`
 
 ## Core Options
 
@@ -42,7 +44,7 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
 - `.sheet_name(name: &str)` case-insensitive sheet name. It will match the first sheet with name after stripping spaces and punctuation.
 - `.read_mode_async()` Defer processing of rows with a callback in the second argument in render_spreadsheet_async() 
 - `.json_lines()` Output will be rendered one json object per row.
-- `field_name_mode(system: &str, override_header: bool)`: use either A1 (`a`, `b`, ... `z`, `aa`, `ab`, ...) or C-prefixed zero-padded numbers (`c01`, `c02`, ...) for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag. The C-style padding width scales with the sheet's total column count, so keys still sort correctly regardless of width: `c01`..`c99` under 100 columns, `c001`..`c999` from 100 up to 1,000, `c0001`..`c9999` from 1,000 up to 10,000 (see `build_padded_col_key` in `headers.rs`).
+- `field_name_mode(system: &str, override_header: bool)`: use either A1 (`a`, `b`, ... `z`, `aa`, `ab`, ...) or C-prefixed zero-padded numbers (`c01`, `c02`, ...) for the default column key notation where headers are either unavailable or suppressed via the `override_header` flag. The padding width scales with the sheet's column count, so keys keep sorting correctly regardless of width. *(Exact width thresholds: see `0.1.3`.)*
 - `override_headers(keys: &[&str])` Override matched or automatic column keys. More advanced column options will be detailed soon.
 - `override_columns(cols: &[Value])` Lets you override column settings, represented here as an array of `serde_json::Value` key/value objects, where :
   - `key`: overrides the header key,
@@ -53,7 +55,78 @@ Options can be set by instantiating `OptionSet::new("path/to/spreadsheet.xlsx")`
      - `truthy:true_key,false_key` lets you cast custom strings to true or false. If unmatched the field value will be null.
   - `default`: overrides the default value for empty cells.
 
-The C-style keys are prefixed with `c` rather than left as bare zero-padded numbers (`"001"`, `"002"`, ...) for two reasons: zero-padding alone guarantees the keys sort correctly as plain strings in virtually any programming language, and a bare numeric-looking string is a confusing choice for an object/map key -- it's easy to mistake for an array index, and some languages treat numeric-looking string keys specially. If you actually want positional access instead of keyed access, that's a one-liner in most languages regardless of how the keys are named -- in JavaScript, for example, `Object.values(row)` turns a row object into a plain array of its values in field order.
+*(Why C-style keys are `c`-prefixed rather than bare zero-padded numbers: see `0.1.3` in [Version History](#version-history).)*
+
+## Nested output <a id="nested-output"></a>
+
+`Column.key: Option<KeySegment>` is where a matched column's cell value actually lands in
+the output row. A plain rename (`Column::from_source_key_with_format`, or `override_columns`'
+`"key": "new_name"`) produces `KeySegment::Simple` -- the flat, one-column-to-one-field case
+this crate has always supported. The rest of the `KeySegment` tree lets a single column
+(or several columns sharing a container) land somewhere more structured instead:
+
+- `Excluded` -- drop the column from output entirely.
+- `Simple(key)` -- flat leaf, insert directly under `key` (a plain rename produces this).
+- `Object(key, next)` -- nest under `key`, continuing via `next`. Columns sharing a `key`
+  merge into one nested object rather than each creating their own.
+- `Array(container, identifier, key_field, next)` -- find or create an item in the
+  `container` array whose `key_field` equals `identifier`, then continue via `next`
+  *inside* that item.
+- `InnerObject(identifier, field, next)` -- add a literal-valued field to the *current*
+  item (no new nesting level), then continue via `next` in the same item -- flattens
+  multiple discriminators onto one array item instead of nesting each one.
+- `PlainArray(container)` -- push the column's own value directly into `container` as a
+  bare scalar, no wrapping object. Blank cells are dropped rather than kept as positional
+  gaps; an all-blank row still yields `[]`, never an absent key.
+
+*(Implementation notes -- `Arc` vs `Box`, cross-column item matching, JSON round-tripping: see `0.4.0` in [Version History](#version-history).)*
+
+### Building a `KeySegment` from JSON
+
+`KeySegment::from_json`/`Identifier::from_json` are how any client crate -- a frontend UI
+assembling a JSON payload, a web API, or anything else that would rather not write Rust or
+touch `calamine`/`csv` directly -- reaches the full tree. A plain JSON string is shorthand
+for `Simple` (matching `Column`'s own existing plain-string convention); anything else
+needs a tagged object with a `"type"` field:
+
+| `"type"` | other fields |
+| --- | --- |
+| `"excluded"` | -- |
+| `"simple"` | `"key"` (string) |
+| `"object"` | `"key"` (string), `"next"` (nested `KeySegment`) |
+| `"array"` | `"container"` (string), `"identifier"` (string or number), `"key_field"` (string), `"next"` (nested `KeySegment`) |
+| `"inner_object"` | `"identifier"` (string or number), `"field"` (string), `"next"` (nested `KeySegment`) |
+| `"plain_array"` | `"container"` (string) |
+
+`Column::from_json` calls this automatically for a `"key"` field that isn't a plain
+string, so `override_columns` already supports the full tree, not just flat renames.
+
+```json
+{
+  "source_key": "sales_2025",
+  "key": {
+    "type": "array",
+    "container": "sales",
+    "identifier": 2025,
+    "key_field": "year",
+    "next": { "type": "simple", "key": "amount" }
+  }
+}
+```
+
+See [`examples/key_segment_nesting.rs`](examples/key_segment_nesting.rs) for five runnable
+demos (`Object`, `PlainArray`, `Array` + `InnerObject`, `Excluded`, and the JSON form above),
+each building a small CSV in memory and running it through `process_spreadsheet_direct`:
+
+```sh
+cargo run --example key_segment_nesting
+```
+
+### Dropping null values
+
+`RowOptionSet::omit_null_values: bool` recursively strips any key whose value is JSON
+`null` from output -- through nested objects and arrays alike -- rather than emitting
+`"key": null`. *(Scope -- why empty strings and array elements are untouched: see `0.4.0`.)*
 
 #### To do
 More details of options to come.
@@ -94,7 +167,7 @@ If the file name and extension cannot be matched, because the file is unavailabl
 
 ## Examples
 
-The main implementation is my unpublished [Spreadsheet to JSON CLI](https://github.com/neilg63/spreadsheet_to_json_cli) crate,
+The main implementation is my [Spreadsheet to JSON CLI](https://github.com/neilg63/spreadsheet_to_json_cli) crate (`spread-cli`), which builds a text DSL for the common `KeySegment` shapes above on top of this crate's `--keys`-style column overrides.
 
 ### Simple immediate jSON conversion
 
@@ -203,7 +276,7 @@ fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_i
 
 ## Version History <a id="version-history"></a>
 - **0.1.2** the core public functions with *Result* return types now use a GenericError error type
-- **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging.
+- **0.1.3** Refined A1 and C01 column name styles and added result output as vectors of lines for interoperability with CLI utilities and debugging. C-style keys are prefixed with `c` rather than left as bare zero-padded numbers (`"001"`, `"002"`, ...) for two reasons: zero-padding alone only guarantees correct sort order as plain strings, and a bare numeric-looking key is easy to mistake for an array index (and some languages treat numeric-looking string keys specially). Positional access, when actually wanted, is a one-liner in most languages regardless of key naming -- e.g. `Object.values(row)` in JavaScript. The zero-padding width scales with the sheet's column count so keys keep sorting correctly at any width: `c01`..`c99` under 100 columns, `c001`..`c999` from 100 up to 1,000, `c0001`..`c9999` from 1,000 up to 10,000.
 - **0.1.4** Added support for the Excel Binary format (.xlsb)
 - **0.1.5** Added two new core functions `process_spreadsheet_direct()` for direct row processing in a synchronous context and `process_spreadsheet_async()`  in an asynchronous context with a callback. If you need to process a spreadsheet directly in an async function
 - **0.1.6** Deprecated public function beginning with render (render_spreadsheet_direct() has become. You should use `process_spreadsheet_immediate()` for immediate processing of spreadsheets in an async context). Ensured the header row does not appear as the first data row in spreadsheets.
@@ -216,3 +289,4 @@ fn save_data_row(row: IndexMap<String, Value>, connection: &PgConnection, data_i
 - **0.3.0** Breaking: `Column.date_only: bool` is now `Column.datetime_mode: DateTimeMode`, and `RowOptionSet`'s separate `date_only`/`time_only` booleans are now a single `datetime_mode: DateTimeMode` field -- `RowOptionSet::new()` and `Column::from_source_key_with_format()`/`from_key_ref_with_format()` take `DateTimeMode` instead of the old `bool` in their signatures. Added a `DateTimeMode` enum (`Full`, `Simple`, `DateOnly`, `TimeOnly`, `HmOnly`) as the single, unified representation for datetime rendering, replacing `RowOptionSet`'s previous separate `date_only`/`time_only` booleans and the previously dead `Column.date_only: bool` field — that field was fully wired up for JSON/display output but never actually consulted by the rendering logic, so a per-column date-only override on a genuine (non-string) datetime cell silently did nothing; it's now `Column.datetime_mode`, correctly scoped to `Format::Auto` columns whose cells are already genuine datetimes (`Data::DateTime`/`Data::DateTimeIso`) — it never touches strings or numbers in the same column, unlike an explicit `Format` override, which forces date/time interpretation onto every cell type. Added `Format::Time` (`ti`/`time`), `Format::Hm` (`hm`), and `Format::DateTimeSimple` (`ds`/`simple`) alongside the existing `Format::Date`/`Format::DateTime`, giving explicit per-column control over precision: full ISO-8601 with milliseconds and a trailing `Z` (the default, for JS/JSON interop), the same without the milliseconds/`Z`, date-only, time-only with seconds, or hours:minutes only. Precedence is a column's own `Format` override, then its own `datetime_mode` (Auto columns only), then the row-wide `RowOptionSet.datetime_mode` default. Fixed genuinely time-only Excel cells — e.g. a cell formatted as plain `hh:mm`, which Excel actually stores as a full datetime serial with zero elapsed days, since it has no true time-only type — rendering with the meaningless placeholder date `1899-12-31` (the 1900 date system's epoch); a cell with no real date component is now auto-detected and rendered as a bare time whenever a full datetime wasn't explicitly requested. Fixed `csv_cell_to_json_value` having no `Format::Date`/`Format::DateTime` handling at all — a date-like CSV string starting with a number (e.g. `"2023-06-15"`) could be misread by the numeric-extraction path before ever reaching `fuzzy-datetime`; all five date/time formats now apply uniformly across native Excel/ODS datetime cells, ISO datetime strings, and CSV/TSV text cells. Bumped `fuzzy-datetime` to 0.1.3, adding sliding-pivot two-digit-year expansion (e.g. `21-06-23` resolves relative to the current date rather than a fixed 50/50 century split) for ambiguous CSV/plain-text date cells, and switching its license to MIT.
 - **0.3.1** `ResultSet::new()` takes two new required parameters, `header_row_index: Option<usize>` and `body_start_index: usize`, and `ResultSet` gains matching public fields. Fixed a gap where there was no way to learn which row indices a read actually used -- `OptionSet.header_row`/`.data_row_index` only ever reflect an *explicit* override and stay `None` whenever auto-detection resolved them instead, so a caller relying on those fields (e.g. `spread-cli`'s `--json` metadata) saw `null` even when a header and data start were successfully detected and used. `ResultSet.header_row_index`/`.body_start_index` now carry the actually-resolved 0-based indices regardless of whether they came from an explicit override or `detect_header_and_data_rows`. Scoped to the single-sheet read paths (`read_single_worksheet`/`read_csv_core`); `ResultSet::from_multiple()` (the `--preview`/multi-sheet path) still reports `None`/`0` for now, since a single pair of indices can't represent multiple sheets that may each resolve differently.
 - **0.3.2** `Format::Decimal(places)` (`d1`-`d8`) now rounds native numeric cells (xlsx/ods floats and CSV), matching the precision it already applied to string-typed cells. `Format::Date`/`Format::DateTime`/`Format::DateTimeSimple`/`Format::Time`/`Format::Hm` on text cells and CSV values now accept `/`-separated dates in any order, not just `-`-separated YMD (bumped `fuzzy-datetime` to 0.1.4 for related date-guessing fixes). `Format::Time`/`Format::Hm` are substantially more capable on text/CSV cells and native numeric cells: they now handle a bare time string with no date component (`"11:39"`), a decimal-disguised time (`12.3` meaning 12:30, for both float cells and strings), and a trailing AM/PM marker (`"2:30pm"` -> `14:30`; an hour outside 1-12 with an am/pm marker is treated as already-24-hour and the marker is dropped, e.g. `"14:00pm"` -> `14:00`). Hours are intentionally not capped at 24, since a time column is just as often a duration (elapsed hours) as a time-of-day.
+- **0.4.0** Added `KeySegment` (`Excluded`/`Simple`/`Object`/`Array`/`InnerObject`/`PlainArray`) as the general mechanism behind `Column.key`, letting a column's value land in a nested object, a dynamic-keyed group, or an array of objects, instead of only ever a flat key -- see [Nested output](#nested-output) above and `examples/key_segment_nesting.rs`. `KeySegment::from_json`/`Identifier::from_json` build the full tree from a plain JSON payload (a tagged object with a `"type"` field), so any client crate reaches every shape without writing Rust or touching `calamine`/`csv` directly; `Column::from_json` (and therefore `override_columns`) now uses this automatically whenever `"key"` isn't a plain string. `Identifier` renders back as whichever JSON type it actually is (a plain number stays a number, not `"2015"`), so a round-trip through JSON is lossless either way. Recursive `KeySegment` variants (`Object`/`Array`/`InnerObject`) wrap their continuation in `Arc` rather than `Box`, since `Column` (and its `key`) is cloned repeatedly during column resolution and an O(1) refcount bump matters there the same way it does for `Format::Array`'s `Arc<Format>`. Two columns land in the same `Array` item only when their whole chain of `Array`/`InnerObject` identifiers agrees, not just the one matching segment. Added `RowOptionSet::omit_null_values`, recursively dropping any key whose value is JSON `null` from output (through nested objects/arrays too); it only ever targets genuine `null` -- an empty string is a different, deliberate value and is left alone -- and never removes array elements positionally, since that's `PlainArray`'s own job. `PlainArray` drops blank cells (null, or CSV's native empty string) rather than keeping them as positional gaps, and stays `[]`, not absent, when every matched cell in a row is blank.
