@@ -384,6 +384,47 @@ fn strip_nested_nulls(value: &mut Value) {
     }
 }
 
+/// Removes one key at a dot-separated path from `row`, recursing into nested objects
+/// (built via `KeySegment::Object`) and, where a path segment is exactly `"$"`, into
+/// every element of an array (built via `KeySegment::Array`/`PlainArray`) instead of a
+/// literal object key named `"$"`. Independent of which source column produced the
+/// nested structure -- unlike `Column.key = KeySegment::Excluded`, which suppresses a
+/// whole column at the source, this targets the *final* output shape directly, so it
+/// works the same regardless of how many columns fed into building it.
+///
+/// A path that doesn't exist, or whose shape doesn't match what the path implies (e.g.
+/// a `"$"` segment where the value isn't actually an array), is silently a no-op --
+/// same "unmatched is ignored, not an error" convention as an unmatched `--keys`
+/// `source_key` elsewhere in this crate.
+pub fn exclude_nested_path(row: &mut IndexMap<String, Value>, path: &[&str]) {
+    let Some((first, rest)) = path.split_first() else { return };
+    if rest.is_empty() {
+        row.shift_remove(*first);
+        return;
+    }
+    if let Some(value) = row.get_mut(*first) {
+        exclude_path_in_value(value, rest);
+    }
+}
+
+fn exclude_path_in_value(value: &mut Value, path: &[&str]) {
+    let Some((first, rest)) = path.split_first() else { return };
+    if *first == "$" {
+        if let Value::Array(items) = value {
+            for item in items.iter_mut() {
+                exclude_path_in_value(item, rest);
+            }
+        }
+        return;
+    }
+    let Value::Object(map) = value else { return };
+    if rest.is_empty() {
+        map.remove(*first);
+    } else if let Some(next) = map.get_mut(*first) {
+        exclude_path_in_value(next, rest);
+    }
+}
+
 pub fn match_sheet_name_and_index(workbook: &mut Sheets<BufReader<File>>, opts: &OptionSet) -> (Vec<String>, Vec<String>, Vec<usize>) {
   let mut sheet_indices = vec![];
   let mut selected_names: Vec<String> = vec![];
@@ -447,6 +488,59 @@ mod tests {
         "tags": ["a", null, "b"]
       })
     );
+  }
+
+  #[test]
+  fn test_exclude_nested_path_removes_a_top_level_key() {
+    let mut row: IndexMap<String, Value> = serde_json::from_value(serde_json::json!({
+      "title": "Title 1",
+      "width": 4.78
+    })).unwrap();
+    exclude_nested_path(&mut row, &["width"]);
+    assert_eq!(serde_json::to_value(&row).unwrap(), serde_json::json!({ "title": "Title 1" }));
+  }
+
+  #[test]
+  fn test_exclude_nested_path_removes_one_field_from_a_nested_object() {
+    let mut row: IndexMap<String, Value> = serde_json::from_value(serde_json::json!({
+      "title": "Title 1",
+      "size": {"width": 4.78, "depth": 0.9, "height": 2.37}
+    })).unwrap();
+    exclude_nested_path(&mut row, &["size", "depth"]);
+    assert_eq!(
+      serde_json::to_value(&row).unwrap(),
+      serde_json::json!({ "title": "Title 1", "size": {"width": 4.78, "height": 2.37} })
+    );
+  }
+
+  #[test]
+  fn test_exclude_nested_path_dollar_wildcard_recurses_into_every_array_item() {
+    let mut row: IndexMap<String, Value> = serde_json::from_value(serde_json::json!({
+      "addresses": [
+        {"line1": "1 Road", "admin2": "Countyshire"},
+        {"line1": "2 Street", "admin2": "Othercounty"}
+      ]
+    })).unwrap();
+    exclude_nested_path(&mut row, &["addresses", "$", "admin2"]);
+    assert_eq!(
+      serde_json::to_value(&row).unwrap(),
+      serde_json::json!({ "addresses": [{"line1": "1 Road"}, {"line1": "2 Street"}] })
+    );
+  }
+
+  #[test]
+  fn test_exclude_nested_path_unmatched_or_malformed_path_is_a_silent_no_op() {
+    let original = serde_json::json!({
+      "title": "Title 1",
+      "size": {"width": 4.78}
+    });
+    // unmatched top-level key, unmatched nested key, and a "$" against a non-array all
+    // leave the row untouched rather than erroring
+    for path in [vec!["missing"], vec!["size", "missing"], vec!["title", "$", "x"]] {
+      let mut row: IndexMap<String, Value> = serde_json::from_value(original.clone()).unwrap();
+      exclude_nested_path(&mut row, &path.iter().map(|s| *s).collect::<Vec<_>>());
+      assert_eq!(serde_json::to_value(&row).unwrap(), original, "path {:?} should be a no-op", path);
+    }
   }
 
   #[test]

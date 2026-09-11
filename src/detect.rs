@@ -1,4 +1,4 @@
-use alphanumeric::IsNumeric;
+use alphanumeric::{IsNumeric, StripCharacters};
 use fuzzy_datetime::{iso_fuzzy_to_date_string, iso_fuzzy_to_datetime_string};
 
 use crate::OptionSet;
@@ -83,12 +83,28 @@ fn is_date_like(cell: &str) -> bool {
 /// more reliable "this is data" signal than plain numeric content, since header labels
 /// essentially never take those forms (unlike numbers, which legitimately show up in
 /// headers as e.g. year columns -- see `looks_like_year`).
+/// A locale-formatted number, e.g. "3,14" (decimal comma -- the standard convention in
+/// France, Germany, and other locales where this crate's own `decimal_comma`/
+/// `--euro-number-format` option already applies at value-casting time) or "1,234.56"
+/// (US-style thousands grouping). `IsNumeric::is_numeric()` deliberately only ever
+/// recognises plain `parse::<T>()`-compatible strings -- it has no locale awareness at
+/// all, by design, so it's not the tool for this. `to_first_number` is, but it's
+/// *extractive* (it pulls the first number out of a larger string -- "SKU001" ->
+/// `Some(1.0)`, "Room 12B" -> `Some(12.0)`), which is exactly wrong for "is this cell,
+/// as a whole, numeric" -- it would misclassify plenty of genuine label/code content as
+/// data. Guarding it with "no alphabetic characters at all" keeps the whole-cell
+/// strictness `is_numeric()` had for that case, while gaining `to_first_number`'s own
+/// correct locale-aware parsing for the rest.
+fn is_locale_numeric(cell: &str) -> bool {
+  !cell.chars().any(|c| c.is_alphabetic()) && cell.to_first_number::<f64>().is_some()
+}
+
 fn is_data_signal(cell: &str) -> bool {
   let trimmed = cell.trim();
   if trimmed.is_empty() || looks_like_year(trimmed) {
     return false;
   }
-  is_boolean_like(trimmed) || trimmed.is_numeric() || is_date_like(trimmed)
+  is_boolean_like(trimmed) || trimmed.is_numeric() || is_locale_numeric(trimmed) || is_date_like(trimmed)
 }
 
 /// Whether at least half of a row's populated cells look like data (numeric, boolean,
@@ -279,6 +295,40 @@ mod tests {
       row(&["SKU002", "20"]),
     ];
     assert_eq!(detect_header_and_data_rows(&sample), found(0, 1));
+  }
+
+  #[test]
+  fn test_detects_header_with_decimal_comma_numeric_data() {
+    // Regression test: "3,14"/"9,99"-style decimal-comma values (the standard
+    // convention in France, Germany, and other locales -- also why those locales'
+    // spreadsheet exports use ";" as the field delimiter, since "," is already taken
+    // as the decimal separator) weren't recognised as numeric at all by the header/
+    // data-row heuristic, so a file with no *other* type-based signal anywhere in the
+    // sample fell through to the weaker "looks like labels" check, which wasn't
+    // confident enough here -- header_index came back None (row 0 treated as data)
+    // even though it's an unambiguous header.
+    let sample = vec![
+      row(&["sku", "name", "price"]),
+      row(&["SKU001", "Widget", "3,14"]),
+      row(&["SKU002", "Gadget", "9,99"]),
+    ];
+    assert_eq!(detect_header_and_data_rows(&sample), found(0, 1));
+  }
+
+  #[test]
+  fn test_locale_numeric_recognises_decimal_comma_and_thousands_grouping() {
+    assert!(is_locale_numeric("3,14")); // decimal comma
+    assert!(is_locale_numeric("1,234.56")); // US-style thousands grouping
+    assert!(!is_locale_numeric("no commas here"));
+  }
+
+  #[test]
+  fn test_locale_numeric_rejects_labels_with_embedded_digits() {
+    // to_first_number is extractive ("SKU001" -> Some(1.0), "Room 12B" -> Some(12.0)) --
+    // the alphabetic-character guard is what keeps these correctly classified as
+    // labels/codes, not numeric data, same as plain is_numeric() already did.
+    assert!(!is_locale_numeric("SKU001"));
+    assert!(!is_locale_numeric("Room 12B"));
   }
 
   #[test]

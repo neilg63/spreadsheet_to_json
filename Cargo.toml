@@ -19,7 +19,7 @@ to_segments = "^0.1.2"
 calamine = { version = "0.36.0", features = ["chrono", "dates"] }
 chrono = "^0.4.45"
 csv = "1.4"
-enclose-strings = { version = "0.2.0", features = ["extract"] }
+enclose-strings = { version = "0.3.0", features = ["extract"] }
 fuzzy-datetime = "0.1.4"
 heck = "0.5"
 indexmap = { version = "^2.14.0", features = ["serde"] }

@@ -187,9 +187,9 @@ dependencies = [
 
 [[package]]
 name = "enclose-strings"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a159ae1d9d827aa1b9d9aacb555fc9d5e817859dc0c2521f2ea9b5bf87643585"
+checksum = "d28ed42c85279894da65c47ccbe150e67ef09876bdece71daedec111b9211666"
 
 [[package]]
 name = "encoding_rs"

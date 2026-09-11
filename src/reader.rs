@@ -4,7 +4,7 @@ use heck::ToSnakeCase;
 use indexmap::IndexMap;
 use serde_json::{Number, Value};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -217,8 +217,9 @@ async fn read_multiple_worksheets(
                         true
                     };
                     if is_real_data {
-                        let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-                        rows.push(row_map);
+                        if let Some(row_map) = workbook_row_to_map(row, &resolved_row_opts, &headers) {
+                            rows.push(row_map);
+                        }
                     }
                 }
                 row_index += 1;
@@ -340,8 +341,9 @@ pub async fn read_single_worksheet(
                     true
                 };
                 if is_real_data {
-                    let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-                    rows.push(row_map);
+                    if let Some(row_map) = workbook_row_to_map(row, &resolved_row_opts, &headers) {
+                        rows.push(row_map);
+                    }
                 }
             }
             row_index += 1;
@@ -367,8 +369,13 @@ pub async fn read_single_worksheet(
                 true
             };
             if is_real_data {
-                let row_map = workbook_row_to_map(row, &resolved_row_opts, &headers);
-                save_method(row_map)?;
+                // save_count bounds how many real-data rows are *scanned*, not how many
+                // pass the filter -- it increments here regardless of filter_rules'
+                // outcome, matching row caps' role as a structural/scan limit rather
+                // than a "collect N matching rows" limit.
+                if let Some(row_map) = workbook_row_to_map(row, &resolved_row_opts, &headers) {
+                    save_method(row_map)?;
+                }
                 save_count += 1;
             }
         }
@@ -376,6 +383,33 @@ pub async fn read_single_worksheet(
 
     let ds = DataSet::from_count_and_rows(total, rows, opts);
     Ok(ResultSet::new(info, &headers, ds, opts, out_ref, detected.header_index, first_data_row_index))
+}
+
+/// Sniffs the field delimiter from a file's own first few lines, since extension alone
+/// can't tell a semicolon-delimited or tab-delimited file from a plain comma one --
+/// both `,` and `;` "CSV" files are named `.csv` in the wild, and a raw copy/paste TSV
+/// is just as often saved as `.csv`/`.txt` as `.tsv`. Checks `,`, `;`, and `\t`: a
+/// candidate only qualifies if it appears the *same* number of times on every sampled
+/// line (a strong signal it's genuinely separating columns, not just incidental
+/// punctuation) and at least once. Among qualifying candidates, prefers whichever
+/// implies the most columns -- more columns is a more specific, more informative match
+/// than fewer. Falls back to `fallback` when nothing qualifies (an empty file, a
+/// single-line file, or a genuinely single-column file with no delimiter to see at all).
+fn sniff_delimiter(path: &Path, fallback: u8) -> u8 {
+    let Ok(file) = File::open(path) else { return fallback; };
+    let sample: Vec<String> = BufReader::new(file).lines().take(5).map_while(Result::ok).collect();
+    if sample.is_empty() {
+        return fallback;
+    }
+    [b',', b';', b'\t']
+        .into_iter()
+        .filter_map(|candidate| {
+            let counts: Vec<usize> = sample.iter().map(|line| line.matches(candidate as char).count()).collect();
+            let first = counts[0];
+            (first > 0 && counts.iter().all(|&c| c == first)).then_some((candidate, first))
+        })
+        .max_by_key(|(_, count)| *count)
+        .map_or(fallback, |(candidate, _)| candidate)
 }
 
 /// Process a CSV/TSV file asynchronously with an optional row save method
@@ -393,10 +427,20 @@ pub async fn read_csv_core<'a>(
     save_opt: Option<SaveRowFn>,
     out_ref: Option<&str>,
 ) -> Result<ResultSet, GenericError> {
-    let separator = match path_data.mode() {
-        Extension::Tsv => b't',
+    // Extension only decides the *fallback* delimiter now, not the real one -- a
+    // semicolon-delimited export from a decimal-comma locale (France, Germany, ...) is
+    // still named ".csv", always, and a raw copy/paste TSV is just as often saved as
+    // ".csv"/".txt" as ".tsv". Extension is the right signal for "is this a binary
+    // spreadsheet format calamine should open" (that can't be sniffed as cheaply), but
+    // the wrong one for which byte separates fields in a text file -- that's read from
+    // the file's own content below, falling back to the extension-implied default only
+    // when the content itself is inconclusive (e.g. a single-column file).
+    let extension_fallback = match path_data.mode() {
+        Extension::Tsv => b'\t',
+        Extension::SemicolonSeparatedValues => b';',
         _ => b',',
     };
+    let separator = sniff_delimiter(path_data.path(), extension_fallback);
     if let Ok(mut rdr) = ReaderBuilder::new()
         .delimiter(separator)
         .has_headers(false)
@@ -497,21 +541,20 @@ pub async fn read_csv_core<'a>(
             if capture_rows {
                 if line_count < max_line_usize {
                     if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
-                        let mut row_map = to_index_map(&row, &headers, Some(&resolved_row_opts.columns));
-                        if resolved_row_opts.omit_null_values {
-                            omit_null_values(&mut row_map);
+                        // line_count bounds rows *scanned*, not rows that pass the
+                        // filter -- increments regardless of csv_row_to_map's outcome,
+                        // same reasoning as save_count in the calamine async path.
+                        if let Some(row_map) = csv_row_to_map(&row, &headers, &resolved_row_opts) {
+                            rows.push(row_map);
                         }
-                        rows.push(row_map);
                         line_count += 1;
                     }
                 }
             } else if let Some(save_method) = save_opt.as_ref() {
                 if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
-                    let mut row_map = to_index_map(&row, &headers, Some(&resolved_row_opts.columns));
-                    if resolved_row_opts.omit_null_values {
-                        omit_null_values(&mut row_map);
+                    if let Some(row_map) = csv_row_to_map(&row, &headers, &resolved_row_opts) {
+                        save_method(row_map)?;
                     }
-                    save_method(row_map)?;
                 }
             }
             row_index += 1;
@@ -528,17 +571,51 @@ pub async fn read_csv_core<'a>(
     }
 }
 
-// Convert an array of row data to an IndexMap of serde_json::Value objects
+/// Applies `filter_rules` (if any) and then `omit_null_values` (if set), in that order.
+/// Filtering always runs first: it needs the full, unstripped row, since a rule
+/// matching on a literal `null` couldn't see the key at all if null-omission had
+/// already removed it. Returns `None` when the row is filtered out -- shared by both
+/// the calamine and CSV row-building paths (see `workbook_row_to_map`/`csv_row_to_map`)
+/// so the two can't drift out of sync on ordering the way `omit_null_values` alone
+/// previously had (applied inline, separately, at each CSV call site).
+fn finalize_row(mut row_map: IndexMap<String, Value>, opts: &RowOptionSet) -> Option<IndexMap<String, Value>> {
+    if let Some(rules) = &opts.filter_rules {
+        if !rules.evaluate(&row_map) {
+            return None;
+        }
+    }
+    for path in &opts.excluded_paths {
+        let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+        exclude_nested_path(&mut row_map, &segments);
+    }
+    if opts.omit_null_values {
+        omit_null_values(&mut row_map);
+    }
+    Some(row_map)
+}
+
+// Convert an array of row data to an IndexMap of serde_json::Value objects, applying
+// filter_rules/omit_null_values. `None` means the row was filtered out.
 fn workbook_row_to_map(
     row: &[Data],
     opts: &RowOptionSet,
     headers: &[String],
-) -> IndexMap<String, Value> {
-    let mut row_map = to_index_map(&workbook_row_to_values(row, opts), headers, Some(&opts.columns));
-    if opts.omit_null_values {
-        omit_null_values(&mut row_map);
-    }
-    row_map
+) -> Option<IndexMap<String, Value>> {
+    let row_map = to_index_map(&workbook_row_to_values(row, opts), headers, Some(&opts.columns));
+    finalize_row(row_map, opts)
+}
+
+// CSV equivalent of `workbook_row_to_map` -- same finalize_row step, so the two row
+// sources apply filter_rules/omit_null_values identically rather than each hand-rolling
+// their own (CSV previously duplicated the omit_null_values check inline at two call
+// sites instead of going through one shared helper the way the calamine path already did).
+fn csv_row_to_map(
+    row: &[Value],
+    headers: &[String],
+    opts: &RowOptionSet,
+) -> Option<IndexMap<String, Value>> {
+    let row_map = to_index_map(row, headers, Some(&opts.columns));
+    finalize_row(row_map, opts)
 }
 
 // Convert an array of row data to a vector of serde_json::Value objects
@@ -1466,6 +1543,75 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_rules_drop_non_matching_rows_csv_end_to_end() {
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+
+        let path = write_csv_fixture(
+            "filter_rules.csv",
+            "title,engine_type\nCar A,petrol\nCar B,electric\nCar C,diesel\n",
+        );
+        let mut opts = OptionSet::new(&path);
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("title"), Some(&json!("Car B")));
+    }
+
+    #[test]
+    fn test_filter_rules_drop_non_matching_rows_xlsx_end_to_end() {
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+        use rust_xlsxwriter::Workbook;
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "title").unwrap();
+        sheet.write_string(0, 1, "engine_type").unwrap();
+        sheet.write_string(1, 0, "Car A").unwrap();
+        sheet.write_string(1, 1, "petrol").unwrap();
+        sheet.write_string(2, 0, "Car B").unwrap();
+        sheet.write_string(2, 1, "electric").unwrap();
+        let path = std::env::temp_dir().join("filter_rules.xlsx");
+        workbook.save(&path).unwrap();
+
+        let mut opts = OptionSet::new(&path.to_string_lossy());
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("title"), Some(&json!("Car B")));
+    }
+
+    #[test]
+    fn test_filter_rules_do_not_extend_the_row_scan_cap() {
+        // Row caps bound how many rows are *scanned* (for quick structural preview of
+        // large files), not how many *matching* rows are collected -- a filter that
+        // drops the only row within the cap should not cause the cap to be exceeded
+        // to go find a match further down the file.
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+
+        let path = write_csv_fixture(
+            "filter_rules_cap.csv",
+            "title,engine_type\nCar A,petrol\nCar B,electric\nCar C,electric\n",
+        );
+        let mut opts = OptionSet::new(&path);
+        opts.max = Some(1); // only the first data row ("Car A", petrol) is ever scanned
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert!(rows.is_empty(), "expected no rows: the only scanned row doesn't match, and the cap must not extend the scan to compensate");
+    }
+
+    #[test]
     fn test_resolve_datetime_mode_prefers_column_format_over_row_defaults() {
         // A column's own Format::Date/Format::Time/Format::DateTime overrides the
         // row-wide default; Format::Auto (and anything else) falls back to the column's
@@ -2048,6 +2194,65 @@ mod tests {
         let path = std::env::temp_dir().join(filename);
         std::fs::write(&path, content).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_sniff_delimiter_detects_semicolon_in_a_dot_csv_file() {
+        // A semicolon-delimited export is still named ".csv" in the wild (decimal-comma
+        // locales can't use "," as the field delimiter, since it's already the decimal
+        // separator) -- extension alone can't tell this apart from a plain comma file.
+        let path = write_csv_fixture("semicolon.csv", "sku;name;price\nSKU001;Widget;4,25\n");
+        assert_eq!(sniff_delimiter(std::path::Path::new(&path), b','), b';');
+    }
+
+    #[test]
+    fn test_sniff_delimiter_detects_tab_in_a_dot_csv_file() {
+        let path = write_csv_fixture("tab.csv", "sku\tname\nSKU001\tWidget\n");
+        assert_eq!(sniff_delimiter(std::path::Path::new(&path), b','), b'\t');
+    }
+
+    #[test]
+    fn test_sniff_delimiter_falls_back_when_content_is_inconclusive() {
+        // A genuinely single-column file has no delimiter to see at all -- none of the
+        // candidates appear even once, so sniffing can't say anything and the
+        // extension-implied default is used instead.
+        let path = write_csv_fixture("single_column.csv", "name\nWidget\nGadget\n");
+        assert_eq!(sniff_delimiter(std::path::Path::new(&path), b','), b',');
+    }
+
+    #[test]
+    fn test_semicolon_delimited_decimal_comma_csv_end_to_end() {
+        // The exact real-world case that motivated both this fix and the header-
+        // detection fix in detect.rs: a French/German-style Excel "CSV" export --
+        // semicolon-delimited, decimal commas, ".csv" extension throughout.
+        let path = write_csv_fixture(
+            "euro_export.csv",
+            "sku;name;price\nSKU001;Widget;4,25\nSKU002;Gadget;9,99\n",
+        );
+        let mut opts = OptionSet::new(&path);
+        opts.detect_header = true;
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        assert_eq!(result.keys, vec!["sku", "name", "price"]);
+        let rows = result.to_vec();
+        assert_eq!(rows[0]["sku"], "SKU001");
+        assert_eq!(rows[0]["price"], 4.25);
+        assert_eq!(rows[1]["price"], 9.99);
+    }
+
+    #[test]
+    fn test_tsv_files_split_on_tab_not_the_literal_letter_t() {
+        // Regression test: the TSV delimiter was once `b't'` (the ASCII letter) instead
+        // of `b'\t'` (the tab character) -- a file with no commas at all would then
+        // never split on anything except a literal lowercase 't' appearing in the data,
+        // silently mangling any value containing one (e.g. "Widget" -> "Widge" + "").
+        let path = write_csv_fixture("tab_delimiter.tsv", "sku\tname\nSKU001\tWidget\nSKU002\tGadget\n");
+        let opts = OptionSet::new(&path);
+        let result = process_spreadsheet_direct(&opts).unwrap();
+        let rows = result.to_vec();
+        assert_eq!(rows[0]["sku"], "SKU001");
+        assert_eq!(rows[0]["name"], "Widget");
+        assert_eq!(rows[1]["sku"], "SKU002");
+        assert_eq!(rows[1]["name"], "Gadget");
     }
 
     #[test]
