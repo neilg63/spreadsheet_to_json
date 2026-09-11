@@ -505,6 +505,7 @@ pub async fn read_csv_core<'a>(
         let mut line_count: usize = 0;
         let mut row_index: usize = 0;
         let mut matched_count: usize = 0;
+        let mut save_count: usize = 0;
 
         for result in rdr.records() {
             let Ok(record) = result else {
@@ -571,7 +572,13 @@ pub async fn read_csv_core<'a>(
                     }
                 }
             } else if let Some(save_method) = save_opt.as_ref() {
+                if save_count >= max_line_usize {
+                    break;
+                }
                 if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
+                    // save_count bounds rows *scanned*, not rows that pass the filter --
+                    // it increments regardless of csv_row_to_map's outcome, same
+                    // reasoning as save_count in the calamine streaming path.
                     if let Some(row_map) = csv_row_to_map(&row, &headers, &resolved_row_opts) {
                         save_method(row_map)?;
                         matched_count += 1;
@@ -579,6 +586,7 @@ pub async fn read_csv_core<'a>(
                             break;
                         }
                     }
+                    save_count += 1;
                 }
             }
             row_index += 1;
@@ -1720,6 +1728,69 @@ mod tests {
 
         let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
         assert_eq!(rows.len(), 1, "max's scan cap should still apply even though limit alone would have allowed more");
+    }
+
+    #[test]
+    fn test_max_rows_bounds_the_csv_streaming_save_path() {
+        // Regression test: the CSV streaming (`save_opt`, ReadMode::Async) branch of
+        // read_csv_core never checked max_rows at all -- unlike the calamine streaming
+        // path and both in-memory (capture_rows) paths, it streamed every row in the
+        // file to the save callback regardless of `max`.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let path = write_csv_fixture(
+            "csv_streaming_max.csv",
+            "title\nCar A\nCar B\nCar C\nCar D\n",
+        );
+        let mut opts = OptionSet::new(&path).read_mode_async();
+        opts.max = Some(2);
+
+        let saved_count = Arc::new(AtomicUsize::new(0));
+        let counter = saved_count.clone();
+        let save_func: SaveRowFn = Box::new(move |_row| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(process_spreadsheet_core(&opts, Some(save_func), None)).unwrap();
+
+        assert_eq!(
+            saved_count.load(Ordering::SeqCst), 2,
+            "the streaming save path must respect -m/--max's scan cap, not stream every row in the file"
+        );
+    }
+
+    #[test]
+    fn test_limit_rows_bounds_the_csv_streaming_save_path_independent_of_max() {
+        // limit=2 should stop the streaming save path after two matches, even with
+        // max left at its large default (so max alone wouldn't have capped anything).
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let path = write_csv_fixture(
+            "csv_streaming_limit.csv",
+            "title,engine_type\nCar A,electric\nCar B,electric\nCar C,electric\nCar D,electric\n",
+        );
+        let mut opts = OptionSet::new(&path).read_mode_async().limit_row_count(2);
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let saved_count = Arc::new(AtomicUsize::new(0));
+        let counter = saved_count.clone();
+        let save_func: SaveRowFn = Box::new(move |_row| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(process_spreadsheet_core(&opts, Some(save_func), None)).unwrap();
+
+        assert_eq!(saved_count.load(Ordering::SeqCst), 2);
     }
 
     #[test]
