@@ -134,6 +134,16 @@ pub struct OptionSet {
     pub rows: RowOptionSet,
     pub jsonl: bool,
     pub max: Option<u32>,
+    /// Maximum number of *matching* rows to return -- distinct from `max`, which bounds
+    /// how many rows are *scanned*. `max` keeps scanning up to its own cap regardless of
+    /// how many rows matched `rows.filter_rules`, which suits pagination/batch processing
+    /// (fetch the next N raw rows, a stable count each call). `limit` instead stops
+    /// scanning as soon as this many rows have matched (or, with no filter set, simply
+    /// been read as data), which suits "give me the first N results" -- the two compose,
+    /// so setting both bounds whichever is hit first. `None` (the default) means no
+    /// limit -- unlike `max_rows()`, there's no built-in fallback cap, so existing
+    /// callers see no behavior change until they opt in.
+    pub limit: Option<u32>,
     pub omit_header: bool,
     /// 0-based row index of the header row. `None` means unset -- when `data_row_index` is
     /// also unset (and headers aren't omitted), the reader runs a best-guess detection
@@ -178,6 +188,7 @@ impl OptionSet {
             rows: RowOptionSet::default(),
             jsonl: false,
             max: None,
+            limit: None,
             omit_header: false,
             header_row: None,
             data_row_index: None,
@@ -272,6 +283,13 @@ impl OptionSet {
     /// Sets the maximum number of rows to read.
     pub fn max_row_count(mut self, max: u32) -> Self {
         self.max = Some(max);
+        self
+    }
+
+    /// Sets the maximum number of matching rows to return -- see the `limit` field doc
+    /// for how this differs from `max_row_count`.
+    pub fn limit_row_count(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
         self
     }
 
@@ -514,6 +532,12 @@ impl OptionSet {
                 _ => DEFAULT_MAX_ROWS,
             }
         }
+    }
+
+    /// The configured result-row limit, if any -- `None` means unlimited, unlike
+    /// `max_rows()` there's no built-in fallback cap here.
+    pub fn limit_rows(&self) -> Option<usize> {
+        self.limit.map(|l| l as usize)
     }
 
     /// future development with advanced column options
@@ -1195,6 +1219,15 @@ mod tests {
     fn test_format_mode() {
         let custom_boolean = Format::truthy_custom("si", "no");
         assert_eq!(custom_boolean.to_string(), "truthy(si,no)");
+    }
+
+    #[test]
+    fn test_limit_rows_is_unset_by_default_and_set_via_the_builder() {
+        let opts = OptionSet::new("dummy.csv");
+        assert_eq!(opts.limit_rows(), None);
+
+        let limited = opts.limit_row_count(5);
+        assert_eq!(limited.limit_rows(), Some(5));
     }
 
     #[test]

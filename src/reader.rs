@@ -343,6 +343,12 @@ pub async fn read_single_worksheet(
                 if is_real_data {
                     if let Some(row_map) = workbook_row_to_map(row, &resolved_row_opts, &headers) {
                         rows.push(row_map);
+                        // Unlike max_rows (which bounds this loop via max_row_count/
+                        // max_take regardless of matches), limit_rows stops scanning as
+                        // soon as enough rows have matched -- see the `limit` field doc.
+                        if opts.limit_rows().is_some_and(|limit| rows.len() >= limit) {
+                            break;
+                        }
                     }
                 }
             }
@@ -355,8 +361,13 @@ pub async fn read_single_worksheet(
         // of the sheet regardless of header_row_index/data_row_index, silently exporting
         // notes rows as bogus data records.
         let mut save_count: usize = 0;
+        let mut matched_count: usize = 0;
+        let limit_rows = opts.limit_rows();
         for (idx, row) in range.rows().enumerate() {
             if save_count >= max_rows {
+                break;
+            }
+            if limit_rows.is_some_and(|limit| matched_count >= limit) {
                 break;
             }
             if idx < first_data_row_index {
@@ -372,9 +383,12 @@ pub async fn read_single_worksheet(
                 // save_count bounds how many real-data rows are *scanned*, not how many
                 // pass the filter -- it increments here regardless of filter_rules'
                 // outcome, matching row caps' role as a structural/scan limit rather
-                // than a "collect N matching rows" limit.
+                // than a "collect N matching rows" limit. matched_count is the opposite:
+                // it only counts rows that actually got saved, so limit_rows stops the
+                // scan once enough rows have matched -- see the `limit` field doc.
                 if let Some(row_map) = workbook_row_to_map(row, &resolved_row_opts, &headers) {
                     save_method(row_map)?;
+                    matched_count += 1;
                 }
                 save_count += 1;
             }
@@ -490,6 +504,7 @@ pub async fn read_csv_core<'a>(
         let mut total: usize = 0;
         let mut line_count: usize = 0;
         let mut row_index: usize = 0;
+        let mut matched_count: usize = 0;
 
         for result in rdr.records() {
             let Ok(record) = result else {
@@ -546,6 +561,11 @@ pub async fn read_csv_core<'a>(
                         // same reasoning as save_count in the calamine async path.
                         if let Some(row_map) = csv_row_to_map(&row, &headers, &resolved_row_opts) {
                             rows.push(row_map);
+                            // Unlike max_line_usize (bounds rows scanned regardless of
+                            // matches), limit_rows stops as soon as enough have matched.
+                            if opts.limit_rows().is_some_and(|limit| rows.len() >= limit) {
+                                break;
+                            }
                         }
                         line_count += 1;
                     }
@@ -554,6 +574,10 @@ pub async fn read_csv_core<'a>(
                 if let Some(row) = csv_row_result_to_values(Ok(record), &resolved_row_opts) {
                     if let Some(row_map) = csv_row_to_map(&row, &headers, &resolved_row_opts) {
                         save_method(row_map)?;
+                        matched_count += 1;
+                        if opts.limit_rows().is_some_and(|limit| matched_count >= limit) {
+                            break;
+                        }
                     }
                 }
             }
@@ -1609,6 +1633,93 @@ mod tests {
 
         let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
         assert!(rows.is_empty(), "expected no rows: the only scanned row doesn't match, and the cap must not extend the scan to compensate");
+    }
+
+    #[test]
+    fn test_limit_rows_caps_matching_rows_not_scanned_rows_csv_end_to_end() {
+        // Three rows match the filter; limit=2 should stop collecting after the first
+        // two matches, unlike `max` which would have to be set to a small *scanned*
+        // count and could cut off a match before it's ever reached.
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+
+        let path = write_csv_fixture(
+            "limit_rows.csv",
+            "title,engine_type\nCar A,petrol\nCar B,electric\nCar C,electric\nCar D,electric\n",
+        );
+        let mut opts = OptionSet::new(&path).limit_row_count(2);
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("title"), Some(&json!("Car B")));
+        assert_eq!(rows[1].get("title"), Some(&json!("Car C")));
+    }
+
+    #[test]
+    fn test_limit_rows_caps_matching_rows_xlsx_end_to_end() {
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+        use rust_xlsxwriter::Workbook;
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet().set_name("Sheet1").unwrap();
+        sheet.write_string(0, 0, "title").unwrap();
+        sheet.write_string(0, 1, "engine_type").unwrap();
+        sheet.write_string(1, 0, "Car A").unwrap();
+        sheet.write_string(1, 1, "petrol").unwrap();
+        sheet.write_string(2, 0, "Car B").unwrap();
+        sheet.write_string(2, 1, "electric").unwrap();
+        sheet.write_string(3, 0, "Car C").unwrap();
+        sheet.write_string(3, 1, "electric").unwrap();
+        let path = std::env::temp_dir().join("limit_rows.xlsx");
+        workbook.save(&path).unwrap();
+
+        let mut opts = OptionSet::new(&path.to_string_lossy()).limit_row_count(1);
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("title"), Some(&json!("Car B")));
+    }
+
+    #[test]
+    fn test_limit_rows_without_a_filter_caps_the_plain_row_count() {
+        let path = write_csv_fixture(
+            "limit_rows_no_filter.csv",
+            "title\nCar A\nCar B\nCar C\n",
+        );
+        let opts = OptionSet::new(&path).limit_row_count(2);
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_max_and_limit_compose_whichever_bound_is_hit_first() {
+        // max=1 bounds *scanning* to the first data row -- even though limit=5 would
+        // allow up to five matches, only one row is ever scanned, so at most one row
+        // can possibly be captured. The two settings compose rather than one silently
+        // overriding the other.
+        use crate::filter::{ColumnMatch, FilterCondition, FilterMatch, MatchMode};
+
+        let path = write_csv_fixture(
+            "max_and_limit.csv",
+            "title,engine_type\nCar A,electric\nCar B,electric\nCar C,electric\n",
+        );
+        let mut opts = OptionSet::new(&path).limit_row_count(5);
+        opts.max = Some(1);
+        opts.rows.filter_rules = Some(FilterCondition::Match(ColumnMatch::new(
+            "engine_type",
+            FilterMatch::Exact(json!("electric"), MatchMode::Cs),
+        )));
+
+        let rows = process_spreadsheet_direct(&opts).unwrap().to_vec();
+        assert_eq!(rows.len(), 1, "max's scan cap should still apply even though limit alone would have allowed more");
     }
 
     #[test]
